@@ -1,0 +1,5 @@
+# Runtime artifacts, not source
+accounting.jsonl
+bench_results/
+__pycache__/
+.pytest_cache/
