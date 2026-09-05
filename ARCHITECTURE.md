@@ -39,9 +39,16 @@ __init__.py / plugin.yaml
 ### Key design decisions (do not undo these)
 
 - **Compression lives in `select_context()`, not `compress()`.** Hermes calls
-  `select_context()` every turn before dispatch; `compress()` is reserved as a
-  last-resort survival path that only fires on provider-proven overflow
-  (`last_total_tokens > context_length`). This avoids double-compaction.
+  `select_context()` every turn before dispatch; `compress()` handles genuine
+  whole-session compaction by **delegating to a nested built-in
+  `ContextCompressor`** (the stock LLM summarizer with its protect-first-N /
+  protect-last-N policy, focus-topic support, and summary cooldowns). The
+  nested instance is created lazily on first `compress()` call and tracks
+  `update_model()` so model switches stay in sync. It fires on provider-proven
+  overflow (`last_total_tokens > context_length`) or manual `/compress`
+  (`force=True`) — never on thresholds, avoiding double-compaction with
+  select_context. If the nested compressor fails to build or raises, the
+  engine falls back to a crude synthetic survival list (system prompt + note).
 - **Role bridge**: SOMA keys on connector-style role `toolResult`; Hermes uses
   OpenAI role `tool`. `_cap_openai_tool_result()` copies the message, sets
   role `toolResult`, calls `cap_tool_result`, sets it back.
@@ -103,7 +110,7 @@ repo at `~/.hermes/hermes-agent/agent/context_engine.py`). Required:
 | `name` (property) | must return `"soma"`, matching `context.engine` in config.yaml |
 | `update_from_response(usage)` | read `prompt_tokens`/`completion_tokens`/`total_tokens` into `last_*` attrs |
 | `should_compress(prompt_tokens=None)` | ours: True only on proven overflow |
-| `compress(messages, current_tokens, focus_topic, force, memory_context)` | ours: identity unless proven overflow, then minimal synthetic list |
+| `compress(messages, current_tokens, focus_topic, force, memory_context)` | ours: delegates to nested built-in ContextCompressor (LLM summarizer) on proven overflow or manual /compress; identity otherwise |
 
 Class attributes read directly by `run_agent.py` (MUST be maintained):
 `last_prompt_tokens`, `last_completion_tokens`, `last_total_tokens`,
@@ -167,18 +174,24 @@ ALWAYS the venv interpreter — system python3 lacks scikit-learn/pytest:
 ```bash
 cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
-# expect: 66 passed (16 SOMA core + 50 engine, incl. accounting & envelope)
+# expect: 76 passed (16 SOMA core + 60 engine, incl. accounting,
+# envelope & delegation)
 ```
+
+Testing and benchmarking are documented in full in `tests/BENCHMARK.md`
+(includes `soma-mini-bench` usage and result interpretation).
 
 Test layout:
 - `tests/test_soma_core.py` — 16 vendored behavioural checks (sizing table,
   idempotency, no-inflation, pairing, determinism across processes).
-- `tests/test_engine.py` — 50 engine contract tests: ABC identity, token
+- `tests/test_engine.py` — 60 engine contract tests: ABC identity, token
   accounting, get_status shape, select_context passthrough rules, orphan
   fallback, fail-open fault injection (monkeypatched compressor/orphan check
-  raising -> must return None), JSON-envelope unwrap/re-wrap, idempotency,
-  accounting (one line per changed call, zero on no-op, write failures
-  never escape), overflow fallback, lazy-sklearn fallback scorer.
+  raising -> must return None), JSON-envelope unwrap/re-wrap for both
+  envelope shapes, idempotency, accounting (one line per changed call, zero
+  on no-op, write failures never escape), overflow fallback, lazy-sklearn
+  fallback scorer, and compressor delegation (manual /compress, proven
+  overflow, model-switch forwarding, synthetic fallback on nested failure).
 
 Targeted runs:
 
@@ -213,7 +226,7 @@ cd ~/.hermes/hermes-agent && hermes chat -v -q "say ACK" 2>&1 | grep -a "Using c
 wc -l ~/.hermes/plugins/context_engine/soma/accounting.jsonl   # gained a line?
 ```
 
-Interpretation: a session whose tool results are all under 16K chars writes
+Interpretation: a session whose tool results are all under 32K chars writes
 NOTHING to accounting.jsonl — that is correct (cache-stable no-op), not a
 failure. Use a 40K+ read_file to force a compression.
 
@@ -244,7 +257,7 @@ failure. Use a 40K+ read_file to force a compression.
    will fail (fail-open: requests pass through uncompressed).
 
 4. **No accounting lines but engine loaded.** Expected when no tool result
-   exceeded 16K chars (e.g. terminal output is size-capped by Hermes before
+   exceeded 32K chars (e.g. terminal output is size-capped by Hermes before
    entering history). Force with a large `read_file`. If a large read_file
    still writes nothing, suspect the JSON-envelope path: the persisted tool
    content is a single-line envelope; check `results_capped` logic in
@@ -303,7 +316,7 @@ grep -n "abstractmethod" ~/.hermes/hermes-agent/agent/context_engine.py
 grep -n "_apply_context_engine_selection" ~/.hermes/hermes-agent/agent/conversation_loop.py
 # Confirm select_context is still invoked per-turn and fail-open.
 
-# 4. Full test suite (must be 66/66):
+# 4. Full test suite (must be 76/76):
 cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -q
 
@@ -344,6 +357,9 @@ need changes.
 Built 2026-09-04 per plan `~/.hermes/plans/2026-09-04_164920-soma-context-engine-plugin.md`.
 Coordinator (glm-5.3-flash) executed Task 3 inline; Tasks 1/2/4/5/7 via
 delegate_task subagents; two-stage review per task (coordinator spec check +
-independent reviewer subagent, fail-closed JSON verdict). Git history in
-`~/.hermes/plugins` (branch: main) — one commit per task; the JSON-envelope
-fix (`790581b`) came out of the Task 6 live soak.
+independent reviewer subagent, fail-closed JSON verdict). Early task commits
+were squashed; the repo history is: `c94a827` README, `e8cfd26` full
+implementation (including the JSON-envelope fix that came out of the Task 6
+live soak), then the compressor-delegation change (Sep 5 2026) with this
+documentation. Benchmark methodology and delegation TDD notes also live in
+the `context-compression` skill reference `soma-plugin-live.md`.
