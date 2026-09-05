@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# soma-mini-bench launcher — runs the versioned benchmark script from this repo
+# under the Hermes venv (which has the deps both engines need). Falls back to
+# the repo's own engine code; point HERMES_REPO elsewhere if Hermes lives
+# somewhere other than ~/.hermes/hermes-agent on this machine.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BENCH_PY="${SCRIPT_DIR}/soma-mini-bench.py"
+
+VENV="${HERMES_VENV:-${HOME}/.hermes/hermes-agent/venv/bin/python}"
+if [[ ! -x "${VENV}" ]]; then
+    echo "error: Hermes venv not found at ${VENV}" >&2
+    echo "       set HERMES_VENV to the venv python binary" >&2
+    exit 1
+fi
+
+unset PYTHONPATH
+unset PYTHONHOME
+exec "${VENV}" "${BENCH_PY}" "$@"

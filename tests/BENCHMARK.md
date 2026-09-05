@@ -59,19 +59,26 @@ agent histories through the engines' REAL entry points — the built-in via
 **needle fidelity** (are load-bearing facts — paths, test names, errors —
 still present in what the provider would receive?).
 
+The benchmark script and its launcher are versioned with the plugin in
+`bench/` (repo root): the `bench/soma-mini-bench` launcher execs the script
+under the Hermes venv and resolves the plugin root from its own location. A
+host-installed copy may also exist on `PATH` as `soma-mini-bench`, but the
+repo copy is the source of truth.
+
 ### Running it (humans)
 
 ```bash
-soma-mini-bench run                  # full suite, human-readable table
-soma-mini-bench scenarios            # list available scenarios
-soma-mini-bench run --scenario pytest
-soma-mini-bench report <file.json>   # re-print a saved result
+cd ~/.hermes/plugins/context_engine/soma        # repo root (or wherever cloned)
+bench/soma-mini-bench run                      # full suite, human-readable table
+bench/soma-mini-bench run --scenario pytest
+bench/soma-mini-bench scenarios                # list available scenarios
+bench/soma-mini-bench report <file.json>       # re-print a saved result
 ```
 
 ### Running it (agents)
 
 ```bash
-soma-mini-bench run --json           # machine-readable output
+bench/soma-mini-bench run --json           # machine-readable output
 ```
 
 Every run saves a JSON result to the plugin's `bench_results/` directory

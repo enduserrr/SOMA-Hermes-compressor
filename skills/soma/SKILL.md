@@ -70,7 +70,7 @@ cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
 
 # Offline benchmark vs default compressor (machine-readable for agents)
-soma-mini-bench run --json
+bench/soma-mini-bench run --json
 
 # Accounting trail (one JSONL line per changed request)
 cat ~/.hermes/plugins/context_engine/soma/accounting.jsonl
