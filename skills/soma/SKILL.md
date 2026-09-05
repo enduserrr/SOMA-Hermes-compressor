@@ -65,7 +65,7 @@ source of truth and are read from the cloned repo, never duplicated here.
 ## Quick reference
 
 ```bash
-# Test suite (expect 76 passed; venv only — system python3 cannot import)
+# Test suite (expect 77 passed; venv only — system python3 cannot import)
 cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
 
@@ -74,6 +74,11 @@ bench/soma-mini-bench run --json
 
 # Accounting trail (one JSONL line per changed request)
 cat ~/.hermes/plugins/context_engine/soma/accounting.jsonl
+
+# Savings report (read-only): total / per-session / one session
+soma-savings                 # total chars saved
+soma-savings -v              # per-session breakdown
+soma-savings <session-id>    # that session + grand total
 
 # Revert (lossless, anytime)
 hermes config set context.engine compressor
@@ -96,6 +101,6 @@ hermes config set context.engine compressor
 
 ## Verification
 
-- `pytest tests/ -v` reports 76 passed (16 core + 60 engine).
+- `pytest tests/ -v` reports 77 passed (61 engine + 16 SOMA core).
 - A scratch session reading a 40K+ char file adds exactly one line to
   `accounting.jsonl`.

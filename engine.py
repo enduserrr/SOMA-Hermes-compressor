@@ -80,11 +80,23 @@ def _est_chars(messages: List[Dict[str, Any]]) -> int:
 
 
 def _append_accounting_record(
-    input_chars: int, output_chars: int, results_capped: int, reason: str
+    input_chars: int,
+    output_chars: int,
+    results_capped: int,
+    reason: str,
+    session_id: str = "-",
 ) -> None:
-    """Append one JSONL accounting record. Best-effort, never raises."""
+    """Append one JSONL accounting record. Best-effort, never raises.
+
+    ``session_id`` is written when known (captured via on_session_start) so
+    the reporting CLI (``soma-savings``) can attribute per-request savings to
+    a session. Defaults to "-" when unknown (e.g. offline bench harness,
+    which never runs on_session_start). Recording a field is additive — it
+    never affects the compression result written per request.
+    """
     try:
         record = {
+            "session_id": session_id,
             "input_est_chars": input_chars,
             "output_est_chars": output_chars,
             "results_capped": results_capped,
@@ -115,6 +127,22 @@ class SomaEngine(ContextEngine):
         self._provider: str = ""
         self._api_mode: str = ""
         self._fallback_compressor: Any = None  # lazily created built-in
+        self._session_id: str = "-"  # set via on_session_start for accounting
+
+    # -- Session lifecycle ----------------------------------------------------
+
+    def on_session_start(self, session_id: str, **kwargs) -> None:
+        """Record the active session id so accounting rows are attributable.
+
+        Additive only: unlike the host's compression/summarizer path this just
+        stores an id for the reporting CLI. compression_result / select_context
+        output is completely unaffected. Fail-open: a session id that cannot
+        be stored must never raise into agent startup.
+        """
+        try:
+            self._session_id = session_id or "-"
+        except Exception:
+            self._session_id = "-"
 
     # -- Identity ----------------------------------------------------------
 
@@ -353,6 +381,7 @@ class SomaEngine(ContextEngine):
             _est_chars(out),
             results_capped,
             "near_passthrough",
+            self._session_id,
         )
         return out
 

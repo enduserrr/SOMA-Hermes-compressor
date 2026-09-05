@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# soma-savings launcher — read-only SOMA savings reporter. Pure stdlib, no
+# venv required. Resolves the plugin root from this script's location so it
+# works from a cloned repo or a deployed copy at
+# ~/.hermes/plugins/context_engine/soma/scripts/.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "${SCRIPT_DIR}/soma-savings.py" "$@"

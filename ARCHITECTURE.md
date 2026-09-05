@@ -162,8 +162,13 @@ CLI sessions pick it up immediately; gateway sessions need a gateway restart
 (`systemctl --user restart hermes-gateway.service`).
 
 Accounting file: `~/.hermes/plugins/context_engine/soma/accounting.jsonl` —
-one JSON line per changed request: `input_est_chars`, `output_est_chars`,
-`results_capped`, `reason` (`near_passthrough`), `timestamp`.
+one JSON line per changed request: `session_id`, `input_est_chars`,
+`output_est_chars`, `results_capped`, `reason` (`near_passthrough`),
+`timestamp`. `session_id` is captured via the ABC's `on_session_start` hook
+and written so the read-only `soma-savings` CLI (see `scripts/`) can attribute
+savings per session. It is purely additive — the compression result written
+per request is unchanged. Rows written before the field existed (or by the
+offline bench harness, which never triggers `on_session_start`) carry `-`.
 
 ---
 
@@ -174,7 +179,7 @@ ALWAYS the venv interpreter — system python3 lacks scikit-learn/pytest:
 ```bash
 cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
-# expect: 76 passed (16 SOMA core + 60 engine, incl. accounting,
+# expect: 77 passed (16 SOMA core + 61 engine, incl. accounting,
 # envelope & delegation)
 ```
 
@@ -184,7 +189,7 @@ Testing and benchmarking are documented in full in `tests/BENCHMARK.md`
 Test layout:
 - `tests/test_soma_core.py` — 16 vendored behavioural checks (sizing table,
   idempotency, no-inflation, pairing, determinism across processes).
-- `tests/test_engine.py` — 60 engine contract tests: ABC identity, token
+- `tests/test_engine.py` — 61 engine contract tests: ABC identity, token
   accounting, get_status shape, select_context passthrough rules, orphan
   fallback, fail-open fault injection (monkeypatched compressor/orphan check
   raising -> must return None), JSON-envelope unwrap/re-wrap for both
@@ -316,7 +321,7 @@ grep -n "abstractmethod" ~/.hermes/hermes-agent/agent/context_engine.py
 grep -n "_apply_context_engine_selection" ~/.hermes/hermes-agent/agent/conversation_loop.py
 # Confirm select_context is still invoked per-turn and fail-open.
 
-# 4. Full test suite (must be 76/76):
+# 4. Full test suite (must be 77/77):
 cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -q
 

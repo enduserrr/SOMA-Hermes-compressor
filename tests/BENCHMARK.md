@@ -16,7 +16,7 @@ cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
 ```
 
-Expected result: **76 passed** (16 SOMA core + 60 engine). If the count is
+Expected result: **77 passed** (16 SOMA core + 61 engine). If the count is
 lower after a Hermes upgrade, work through the repair checklist in the
 plugin's `ARCHITECTURE.md` §5.
 

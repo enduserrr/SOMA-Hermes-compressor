@@ -72,7 +72,7 @@ immediately.
 ```bash
 cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
-# expect: 76 passed (system python3 CANNOT import the repo — venv only)
+# expect: 77 passed (system python3 CANNOT import the repo — venv only)
 ```
 
 The offline benchmark CLI (`soma-mini-bench`) compares SOMA against the
@@ -143,6 +143,25 @@ Every `select_context()` call that changed something appends one JSON line to:
 ~/.hermes/plugins/context_engine/soma/accounting.jsonl
 ```
 
-Record fields: `input_est_chars`, `output_est_chars`, `results_capped`,
-`reason`, `timestamp`. Accounting is best-effort — a write failure never breaks
-the request.
+Record fields: `session_id`, `input_est_chars`, `output_est_chars`,
+`results_capped`, `reason`, `timestamp`. Accounting is best-effort — a write
+failure never breaks the request. `session_id` is tagged via `on_session_start`
+so savings can be attributed per session (see `soma-savings` below).
+
+## Reading savings: `soma-savings`
+
+A read-only CLI reports compression savings from `accounting.jsonl` (it never
+writes, never touches the compressor or tester). Installed at
+`scripts/soma-savings` in this repo; a symlink into `~/.local/bin/soma-savings`
+is also created on this host.
+
+```bash
+soma-savings                # total chars saved across all sessions
+soma-savings -v             # per-session list, then the grand total
+soma-savings <session-id>   # that session's savings + grand total
+```
+
+Run from any directory. Example: `soma-savings 20260905_143052_a1b2c3`.
+Note: accounting rows recorded before the `session_id` field existed group
+under `-` (unknown). Point it at a different accounting file with the
+`SOMA_ACCOUNTING` env var.
