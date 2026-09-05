@@ -109,6 +109,12 @@ class SomaEngine(ContextEngine):
         self.threshold_tokens: int = 0
         self.context_length: int = 0
         self.compression_count: int = 0
+        self._model: str = ""
+        self._base_url: str = ""
+        self._api_key: str = ""
+        self._provider: str = ""
+        self._api_mode: str = ""
+        self._fallback_compressor: Any = None  # lazily created built-in
 
     # -- Identity ----------------------------------------------------------
 
@@ -123,12 +129,22 @@ class SomaEngine(ContextEngine):
         """Update tracked token usage from an API response.
 
         Fail-open: a malformed payload logs once and leaves prior counters
-        intact rather than raising into the agent loop.
+        intact rather than raising into the agent loop. Usage is also
+        mirrored into the nested built-in compressor so its threshold
+        logic sees real token counts.
         """
         try:
             self.last_prompt_tokens = int(usage.get("prompt_tokens") or 0)
             self.last_completion_tokens = int(usage.get("completion_tokens") or 0)
             self.last_total_tokens = int(usage.get("total_tokens") or 0)
+            nested = self._fallback_compressor
+            if nested is not None:
+                try:
+                    nested.last_prompt_tokens = self.last_prompt_tokens
+                    nested.last_completion_tokens = self.last_completion_tokens
+                    nested.last_total_tokens = self.last_total_tokens
+                except Exception:
+                    pass
         except (TypeError, ValueError, AttributeError):
             log.exception("soma: malformed usage payload ignored")
             return
@@ -147,6 +163,16 @@ class SomaEngine(ContextEngine):
         """Record the active model's context window and derive the threshold."""
         self.context_length = context_length
         self.threshold_tokens = int(context_length * self.threshold_percent)
+        self._model = model
+        self._base_url = base_url
+        self._api_key = api_key
+        self._provider = provider
+        self._api_mode = api_mode
+        if self._fallback_compressor is not None:
+            self._fallback_compressor.update_model(
+                model, context_length, base_url=base_url,
+                api_key=api_key, provider=provider, api_mode=api_mode,
+            )
 
     # -- Status / display ----------------------------------------------------
 
@@ -168,15 +194,61 @@ class SomaEngine(ContextEngine):
     # -- Host-required abstract methods (later tasks) -------------------------
 
     def should_compress(self, prompt_tokens: Optional[int] = None) -> bool:
-        """True only on provider-proven overflow of the context window."""
+        """Delegate the compaction decision to the nested built-in compressor.
+
+        Proven overflow (provider-reported usage beyond the window) fires
+        first and unconditionally. Otherwise the nested built-in decides —
+        it owns thresholds (threshold_tokens from config), summary-LLM
+        cooldowns, and anti-thrash state — so auto-compaction behaves
+        exactly as it would natively while SOMA's select_context keeps the
+        cheap per-request shrink. Fail-open: any exception -> False.
+        """
         try:
-            return (
+            if (
                 self.context_length > 0
                 and self.last_total_tokens > self.context_length
-            )
+            ):
+                return True
+            nested = self._get_fallback_compressor()
+            if nested is not None:
+                try:
+                    return bool(nested.should_compress(prompt_tokens))
+                except Exception:
+                    log.exception("soma: nested should_compress failed")
+            return False
         except Exception:
             log.exception("soma: should_compress failed; defaulting to False")
             return False
+
+    def _get_fallback_compressor(self):
+        """Lazily create the nested built-in ContextCompressor (LLM summarizer).
+
+        Created on first compress() call, not at engine init, so the plugin
+        import stays cheap. Returns None if construction fails (fail-open:
+        callers fall back to the synthetic survival list).
+        """
+        if self._fallback_compressor is None:
+            try:
+                from agent.context_compressor import ContextCompressor
+                self._fallback_compressor = ContextCompressor(
+                    model=self._model or "default",
+                    threshold_percent=0.50,
+                    base_url=self._base_url,
+                    api_key=self._api_key,
+                    provider=self._provider,
+                    api_mode=self._api_mode,
+                    config_context_length=self.context_length or None,
+                )
+                if self.context_length:
+                    self._fallback_compressor.update_model(
+                        self._model, self.context_length,
+                        base_url=self._base_url, api_key=self._api_key,
+                        provider=self._provider, api_mode=self._api_mode,
+                    )
+            except Exception:
+                log.exception("soma: nested ContextCompressor init failed")
+                return None
+        return self._fallback_compressor
 
     def compress(
         self,
@@ -186,24 +258,41 @@ class SomaEngine(ContextEngine):
         force: bool = False,
         memory_context: str = "",
     ) -> List[Dict[str, Any]]:
-        """Last-resort fallback: only fires on proven overflow.
+        """Whole-session compaction: delegate to the built-in LLM summarizer.
 
-        Without provider-proven overflow this is an identity pass-through.
-        When overflow IS proven, returns a minimal synthetic list (system
-        prompt preserved + a short overflow note) so the engine alone can
-        survive a wedged session — no LLM call; SOMA compression proper
-        stays in select_context(). Fail-open: never raises.
+        SOMA handles per-request shrink in select_context(); genuine whole-
+        session compaction (threshold-triggered or manual /compress) is the
+        built-in ContextCompressor's job, so delegate to a nested instance.
+        No provider-proven overflow and not manual -> identity pass-through.
+        If the nested compressor fails, fall back to the synthetic survival
+        list so the engine alone can survive a wedged session. Fail-open.
         """
         try:
             overflow = self.context_length > 0 and self.last_total_tokens > self.context_length
-            if not overflow:
+            if not overflow and not force:
                 return messages
+            nested = self._get_fallback_compressor()
+            if nested is not None:
+                try:
+                    result = nested.compress(
+                        messages,
+                        current_tokens=current_tokens,
+                        focus_topic=focus_topic,
+                        force=force,
+                        memory_context=memory_context,
+                    )
+                    if isinstance(result, list) and result and all(
+                        isinstance(m, dict) for m in result
+                    ):
+                        self.compression_count += 1
+                        return result
+                    log.exception("soma: nested compress returned invalid value")
+                except Exception:
+                    log.exception("soma: nested compress failed; using synthetic fallback")
+            # Synthetic survival fallback (no nested compressor, or it failed)
             out: List[Dict[str, Any]] = []
             first = messages[0] if messages else None
-            if (
-                isinstance(first, dict)
-                and first.get("role") == "system"
-            ):
+            if isinstance(first, dict) and first.get("role") == "system":
                 out.append(first)
             out.append({"role": "user", "content": FALLBACK_NOTE})
             return out

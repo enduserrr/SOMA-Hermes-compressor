@@ -484,7 +484,7 @@ class TestShouldCompress:
         assert out == msgs
 
     def test_compress_overflow_returns_shortened_fallback(self):
-        """Proven overflow -> short synthetic list (no LLM call)."""
+        """Proven overflow -> delegates to nested built-in (LLM summarizer)."""
         eng = make_engine()
         eng.update_model("m", context_length=1000)
         eng.update_from_response(
@@ -495,11 +495,15 @@ class TestShouldCompress:
             {"role": "user", "content": "x" * 5000},
             {"role": "assistant", "content": "y" * 5000},
         ]
-        out = eng.compress(msgs)
-        assert len(out) < len(msgs)
-        assert sum(len(str(m.get("content") or "")) for m in out) < sum(
-            len(str(m.get("content") or "")) for m in msgs
-        )
+        sentinel = [{"role": "user", "content": "delegated"}]
+        nested = eng._get_fallback_compressor()
+        assert nested is not None
+        orig = nested.compress
+        nested.compress = lambda *a, **k: sentinel
+        try:
+            assert eng.compress(msgs) is sentinel
+        finally:
+            nested.compress = orig
 
     def test_fallback_preserves_system_prompt(self):
         eng = make_engine()
@@ -507,6 +511,7 @@ class TestShouldCompress:
         eng.update_from_response(
             {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
         )
+        eng._get_fallback_compressor = lambda: None  # force synthetic path
         system = {"role": "system", "content": "You are a helpful assistant."}
         msgs = [system, {"role": "user", "content": "x" * 5000}]
         out = eng.compress(msgs)
@@ -519,6 +524,7 @@ class TestShouldCompress:
         eng.update_from_response(
             {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
         )
+        eng._get_fallback_compressor = lambda: None  # force synthetic path
         msgs = [{"role": "user", "content": "x" * 5000}]
         out = eng.compress(msgs)
         assert len(out) == 1
@@ -687,3 +693,144 @@ class TestLazySklearn:
             assert len(out[3]["content"]) < len(msgs[3]["content"])
         else:
             pytest.fail("compression must still engage with sklearn unavailable")
+
+
+class TestCompressorDelegation:
+    """compress() delegates to a nested built-in ContextCompressor (LLM
+    summarizer) for whole-session compaction; SOMA keeps select_context."""
+
+    def _builtin_compressor(self, eng):
+        return eng._get_fallback_compressor()
+
+    def test_delegate_returns_built_in_list(self):
+        eng = make_engine()
+        eng.update_model("m", context_length=1000)
+        eng.update_from_response(
+            {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
+        )
+        assert eng.should_compress() is True
+        msgs = [{"role": "system", "content": "sys"},
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "a1"}]
+        out = eng.compress(msgs)
+        assert isinstance(out, list) and all(isinstance(m, dict) for m in out)
+
+    def test_delegation_uses_nested_compressor(self):
+        eng = make_engine()
+        eng.update_model("m", context_length=1000)
+        eng.update_from_response(
+            {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
+        )
+        nested = self._builtin_compressor(eng)
+        assert nested is not None
+        sentinel = [{"role": "user", "content": "delegated"}]
+        orig = nested.compress
+        nested.compress = lambda *a, **k: sentinel
+        try:
+            msgs = [{"role": "user", "content": "u1"}]
+            assert eng.compress(msgs) is sentinel
+        finally:
+            nested.compress = orig
+
+    def test_manual_compress_always_delegates(self):
+        """Manual /compress (force=True) delegates even without overflow."""
+        eng = make_engine()
+        eng.update_model("m", context_length=100000)
+        nested = self._builtin_compressor(eng)
+        assert nested is not None
+        sentinel = [{"role": "user", "content": "manual"}]
+        nested.compress = lambda *a, **k: sentinel
+        msgs = [{"role": "user", "content": "u1"}]
+        assert eng.compress(msgs, force=True) is sentinel
+
+    def test_delegation_failure_falls_back_to_synthetic(self):
+        """If the nested compressor raises, keep the synthetic survival list."""
+        eng = make_engine()
+        eng.update_model("m", context_length=1000)
+        eng.update_from_response(
+            {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
+        )
+        nested = self._builtin_compressor(eng)
+
+        def boom(*a, **k):
+            raise RuntimeError("nested failure")
+
+        orig = nested.compress
+        nested.compress = boom
+        try:
+            msgs = [{"role": "system", "content": "sys"},
+                    {"role": "user", "content": "u1"}]
+            out = eng.compress(msgs)
+            assert out == [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": engine_mod.FALLBACK_NOTE},
+            ]
+        finally:
+            nested.compress = orig
+
+    def test_nested_compressor_tracks_model_switch(self):
+        eng = make_engine()
+        eng.update_model("model-x", context_length=12345)
+        nested = self._builtin_compressor(eng)
+        assert nested.context_length == 12345
+        assert nested.model == "model-x"
+
+    def test_no_nested_compressor_synthetic_fallback_still_works(self):
+        eng = make_engine()
+        eng.update_model("m", context_length=1000)
+        eng.update_from_response(
+            {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
+        )
+        eng._get_fallback_compressor = lambda: None  # force synthetic path
+        msgs = [{"role": "system", "content": "sys"},
+                {"role": "user", "content": "u1"}]
+        out = eng.compress(msgs)
+        assert out == [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": engine_mod.FALLBACK_NOTE},
+        ]
+
+    def test_should_compress_delegates_threshold_decision(self):
+        """Over-threshold (but under context_length) -> True via nested."""
+        eng = make_engine()
+        eng.update_model("m", context_length=1000)  # threshold = 500 tokens
+        nested = eng._get_fallback_compressor()
+        orig = nested.should_compress
+        nested.should_compress = lambda pt: True
+        try:
+            assert eng.should_compress(600) is True  # 600 < 1000, over 500
+        finally:
+            nested.should_compress = orig
+
+    def test_should_compress_under_threshold_false(self):
+        eng = make_engine()
+        eng.update_model("m", context_length=100000)
+        assert eng.should_compress(1000) is False
+
+    def test_should_compress_failure_falls_back_to_overflow(self):
+        eng = make_engine()
+        eng.update_model("m", context_length=1000)
+        eng.update_from_response(
+            {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
+        )
+        nested = eng._get_fallback_compressor()
+        orig = nested.should_compress
+
+        def boom(pt=None):
+            raise RuntimeError("injected")
+
+        nested.should_compress = boom
+        try:
+            assert eng.should_compress() is True  # overflow fallback
+        finally:
+            nested.should_compress = orig
+
+    def test_should_compress_no_nested_overflow_only(self):
+        eng = make_engine()
+        eng.update_model("m", context_length=1000)
+        eng._get_fallback_compressor = lambda: None
+        assert eng.should_compress(600) is False  # under context_length
+        eng.update_from_response(
+            {"prompt_tokens": 900, "completion_tokens": 200, "total_tokens": 1100}
+        )
+        assert eng.should_compress() is True  # proven overflow
