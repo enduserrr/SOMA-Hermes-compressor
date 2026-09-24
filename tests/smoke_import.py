@@ -12,7 +12,7 @@ spec.loader.exec_module(mod)
 
 assert mod.MIN_PASSTHROUGH_CHARS == 16_000
 assert mod.KEEP_FRACTION == 0.60
-assert mod.MAX_KEEP_CHARS == 32_000
+assert mod.MAX_KEEP_CHARS == 24_000
 assert mod.REPORTED_RESULT_CAP == 16_000
 assert all(
     hasattr(mod, n)
