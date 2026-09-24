@@ -610,6 +610,18 @@ class TestAccounting:
         assert eng.select_context(_history_with_big_result(tool_call_id="call_2")) is not None
         assert len(_lines(accounting_path)) == 2
 
+    def test_accounting_records_session_id(self, accounting_path):
+        """on_session_start tags accounting lines so savings are attributable."""
+        eng = make_engine()
+        eng.on_session_start("20260905_demo_session")
+        out = eng.select_context(_history_with_big_result())
+        assert out is not None
+        lines = _lines(accounting_path)
+        assert lines
+        rec = json.loads(lines[0])
+        assert rec.get("session_id") == "20260905_demo_session"
+        assert rec["output_est_chars"] < rec["input_est_chars"]
+
     def test_all_lines_parse_as_json(self, accounting_path):
         eng = make_engine()
         eng.select_context(_history_with_big_result())
