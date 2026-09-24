@@ -5,6 +5,11 @@ provider call. Uses the vendored SOMA core
 ([DendriteHQ/SOMA-OpenClaw-compressor](https://github.com/DendriteHQ/SOMA-OpenClaw-compressor),
 MIT license — see `LICENSE` and `soma_compressor.py`). No LLM calls.
 
+> **Scope guarantee:** SOMA only ever rewrites **tool results** (`role: tool`)
+> in the per-request message copy. Pre-prompt context — the system prompt,
+> SOUL.md, attached skills, memories — and all user/assistant messages pass
+> through untouched, and persisted history is never mutated.
+
 > **Deeper docs:** `ARCHITECTURE.md` covers the internal design, the Hermes
 > integration contract, debugging triage, and the full repair checklist for
 > when a Hermes update breaks something.
