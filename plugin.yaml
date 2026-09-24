@@ -1,0 +1,3 @@
+name: soma
+version: "0.1.0"
+description: "SOMA extractive context engine — shrinks oversized tool results per-request (TF-IDF line scoring, deterministic, cache-stable) before each provider call."
