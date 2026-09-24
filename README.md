@@ -49,12 +49,61 @@ immediately.
   `tool_calls` or tool results, the original request is kept.
 - Fail-open: any exception leaves the request untouched (returns `None`).
 - JSON tool-result envelopes (`read_file`-style single-line
-  `{"content": "...", ...}` **and** `terminal`-style `{"output": "...",
+  `{"content": "..."}` **and** `terminal`-style `{"output": "...",
   "exit_code": N}`) are unwrapped, the inner text is compressed
   (SOMA is line-based — a 30K one-line payload is incompressible as-is), and
   the result is re-wrapped with envelope metadata preserved (`total_lines`,
   `file_size`, `exit_code`, `error`, `cwd` — downstream consumers grep
   `exit_code` back out of the content, so it must survive).
+- **Dual-compressor design:** SOMA owns the cheap per-request shrink; whole-
+  session compaction (manual `/compress`, or provider-proven overflow) is
+  delegated to a nested built-in `ContextCompressor` (LLM summarizer) whose
+  decision logic, cooldowns and model-switch tracking match the stock
+  engine. If the nested compressor fails to build, a crude synthetic
+  survival list (system prompt + notice) is the last resort.
+
+## Testing & benchmarking
+
+```bash
+cd ~/.hermes/plugins/context_engine/soma
+~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
+# expect: 76 passed (system python3 CANNOT import the repo — venv only)
+```
+
+The offline benchmark CLI (`soma-mini-bench`) compares SOMA against the
+default compressor — usage, scenarios and result interpretation are in
+`tests/BENCHMARK.md`.
+
+## Debugging
+
+Symptom-first triage (full details in `ARCHITECTURE.md` §4):
+
+1. **Engine not loaded** — grep `~/.hermes/logs/agent.log` for
+   `Using context engine: soma`. Absent + "not found" WARNING => check the
+   symlink (Install above) and `hermes config get context.engine`.
+2. **Import errors probing manually** — run from `~/.hermes/hermes-agent/`;
+   from `~/.hermes` the local `plugins/` dir shadows the repo package.
+3. **No accounting lines despite large reads** — expected when nothing
+   exceeds 32K chars; force with a 40K+ `read_file` in a scratch session.
+4. **Request errors / provider 400s** — grep agent.log for `soma:`; the
+   engine is fail-open, so an exception means compression silently skipped.
+
+## After a Hermes update
+
+1. Re-check the symlink (git-pull in the repo can wipe it).
+2. Run the test suite (Testing above) — all 76 must pass.
+3. Scratch-session check: read a 40K+ char file, confirm
+   `accounting.jsonl` gained a line. Only then trust the engine again.
+
+Full repair checklist (ABC-contract diffing, host call-flow checks, worst
+case): `ARCHITECTURE.md` §5. Immediate rollback at any time:
+
+```bash
+hermes config set context.engine compressor
+```
+
+Rollback is lossless: persisted history is never mutated, only per-request
+copies are rewritten.
 
 ## Tuning constants
 
@@ -84,26 +133,3 @@ Every `select_context()` call that changed something appends one JSON line to:
 Record fields: `input_est_chars`, `output_est_chars`, `results_capped`,
 `reason`, `timestamp`. Accounting is best-effort — a write failure never breaks
 the request.
-
-## How to revert
-
-```bash
-hermes config set context.engine compressor
-```
-
-Rollback is lossless: persisted history is never mutated, only per-request
-copies are rewritten.
-
-## Post-update verification (after Hermes upgrades)
-
-1. Re-verify the repo symlink still exists (see Install above).
-2. Run the plugin test suite:
-
-   ```bash
-   cd ~/.hermes/plugins/context_engine/soma
-   ~/.hermes/hermes-agent/venv/bin/python3 -m pytest
-   ```
-
-3. Scratch-session compression check: in a fresh session, read a 40K+ char
-   file, then confirm `accounting.jsonl` gained a line. Only after all three
-   pass should the engine be trusted again.
