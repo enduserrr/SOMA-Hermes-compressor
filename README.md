@@ -77,7 +77,15 @@ cd ~/.hermes/plugins/context_engine/soma
 
 The offline benchmark CLI (`soma-mini-bench`) compares SOMA against the
 default compressor — usage, scenarios and result interpretation are in
-`tests/BENCHMARK.md`.
+`tests/BENCHMARK.md`. The script and its launcher live in this repo under
+`bench/`. The script resolves the plugin root from its own location, so it
+benchmarks the repo's `engine.py` by default; to point it at a different
+deployed copy, set `SOMA_DIR`. Run it from the repo root:
+
+```bash
+bench/soma-mini-bench run            # full suite, human table  (venv launcher)
+bench/soma-mini-bench run --json     # machine-readable (agents)
+```
 
 ## Debugging
 
