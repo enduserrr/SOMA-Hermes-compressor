@@ -17,10 +17,16 @@ Fields read from each accounting line (the engine writes these):
                        e.g. offline bench harness)
     input_est_chars  estimated chars before compression
     output_est_chars estimated chars after compression
+    input_est_tokens estimated tokens before (added Sep 22 2026; 0 on
+                       older lines)
+    output_est_tokens  estimated tokens after (same date; 0 on older lines)
     results_capped   number of tool results compressed in that request
     timestamp
 
 Savings per request = input_est_chars - output_est_chars.
+Token figures are estimates (tiktoken cl100k_base when installed, else a
+deterministic chars-per-token fallback) — NOT billing truth. Provider-
+reported usage lives in state.db (sessions / session_model_usage).
 """
 from __future__ import annotations
 
@@ -72,6 +78,34 @@ def _saved(rec: dict) -> int:
         return 0
 
 
+def _saved_tokens(rec: dict) -> int:
+    """Token savings for one record; 0 for pre-token-era lines (0/0)."""
+    try:
+        return int(rec.get("input_est_tokens") or 0) - int(
+            rec.get("output_est_tokens") or 0
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+# Legacy records (pre Sep 22 2026) carry only char counts. Backfill uses the
+# SOMA core's deterministic fallback ratio (soma_compressor.CHARS_PER_TOKEN),
+# which is exactly what final_token_estimate() would have recorded — same
+# math, not an ad-hoc guess. Label these "retro" wherever shown.
+LEGACY_CHARS_PER_TOKEN = 4
+
+
+def _retro_tokens(rec: dict) -> int:
+    """Estimated SAVED tokens for a legacy chars-only record (saved chars / 4)."""
+    try:
+        return (
+            int(rec.get("input_est_chars") or 0)
+            - int(rec.get("output_est_chars") or 0)
+        ) // LEGACY_CHARS_PER_TOKEN
+    except (TypeError, ValueError):
+        return 0
+
+
 def _human(n: int) -> str:
     """Format an integer char count with ',' thousands separators."""
     return f"{n:,}"
@@ -95,12 +129,25 @@ def _main(argv=None) -> int:
 
     total_saved = sum(_saved(r) for r in records)
     total_capped = sum(int(r.get("results_capped") or 0) for r in records)
+    # Token savings: real recorded estimates where present; legacy
+    # chars-only records backfilled at the core's chars/token fallback.
+    total_saved_tokens = sum(_saved_tokens(r) for r in records)
+    legacy_n = sum(1 for r in records if not r.get("input_est_tokens"))
+    retro_saved_tokens = sum(
+        _saved_tokens(r) if r.get("input_est_tokens") else _retro_tokens(r)
+        for r in records
+    )
 
     if not args.session_id and not args.by_session:
         # Total across all sessions.
         print("SOMA compression savings (all sessions)")
         print(f"  sessions with compressed requests: {len(records)}")
         print(f"  total chars saved:                {_human(total_saved)}")
+        print(f"  total est. tokens saved:          {_human(total_saved_tokens)}")
+        print(
+            f"  total tokens (incl. retro):       {_human(retro_saved_tokens)}"
+            f"  [{legacy_n} legacy records backfilled at {LEGACY_CHARS_PER_TOKEN} chars/token]"
+        )
         print(f"  tool results compressed:          {_human(total_capped)}")
         return 0
 
@@ -110,10 +157,11 @@ def _main(argv=None) -> int:
         for rec in records:
             sid = str(rec.get("session_id") or "-")
             agg = by_session.setdefault(
-                sid, {"requests": 0, "saved": 0, "capped": 0}
+                sid, {"requests": 0, "saved": 0, "saved_tokens": 0, "capped": 0}
             )
             agg["requests"] += 1
             agg["saved"] += _saved(rec)
+            agg["saved_tokens"] += _saved_tokens(rec)
             agg["capped"] += int(rec.get("results_capped") or 0)
         print("SOMA compression savings, per session")
         for sid in sorted(by_session, key=lambda k: -by_session[k]["saved"]):
@@ -121,19 +169,29 @@ def _main(argv=None) -> int:
             print(
                 f"  {sid:<28} {agg['requests']:>3} reqs  "
                 f"{_human(agg['saved']):>10} chars saved  "
+                f"{_human(agg['saved_tokens'] or agg['saved'] // LEGACY_CHARS_PER_TOKEN):>9} tok est  "
                 f"{agg['capped']:>3} capped"
             )
-        print(f"  {'TOTAL':<28} {len(records):>3} reqs  {_human(total_saved):>10} chars saved")
+        print(
+            f"  {'TOTAL':<28} {len(records):>3} reqs  "
+            f"{_human(total_saved):>10} chars saved  "
+            f"{_human(retro_saved_tokens):>9} tok est"
+        )
         return 0
 
     # Specific session id.
     sid_str = args.session_id
     session_recs = [r for r in records if str(r.get("session_id") or "-") == sid_str]
     session_saved = sum(_saved(r) for r in session_recs)
+    session_saved_tokens = sum(_saved_tokens(r) for r in session_recs)
     session_capped = sum(int(r.get("results_capped") or 0) for r in session_recs)
     print(f"SOMA compression savings for session {sid_str}")
     print(f"  requests compressed:  {len(session_recs)}")
     print(f"  chars saved in this:  {_human(session_saved)}")
+    print(
+        f"  est. tokens saved:    "
+        f"{_human(session_saved_tokens or session_saved // LEGACY_CHARS_PER_TOKEN)}"
+    )
     print(f"  tool results capped:  {_human(session_capped)}")
     print(f"  grand total chars:    {_human(total_saved)}")
     if not session_recs:

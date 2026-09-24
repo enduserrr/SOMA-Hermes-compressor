@@ -38,12 +38,15 @@ _soma_mod = None
 # body lines for <=12% savings; real-session cost of the higher floor is
 # +0.96% chars sent, offset by fewer cache-breaking rewrites (16 vs 26
 # distinct results). >53K behavior is unchanged (already capped at 32K).
-PASSTHROUGH_CHARS = 32_000
-MID_CEILING_CHARS = 32_000
+# floor lowered 32K -> 24K (2026-09-07, user request): the 24-32K band was
+# passing through untouched; now nothing under 24K is ever touched and
+# everything over is capped at 24K.
+PASSTHROUGH_CHARS = 24_000
+MID_CEILING_CHARS = 24_000
 MID_UPPER_CHARS = 53_300
 KEEP_FRACTION = 0.60
 LARGE_UPPER_CHARS = 53_300
-LARGE_CAP_CHARS = 32_000
+LARGE_CAP_CHARS = 24_000
 
 
 # -- Task 4: overflow gate + minimal fallback --------------------------------
@@ -85,6 +88,8 @@ def _append_accounting_record(
     results_capped: int,
     reason: str,
     session_id: str = "-",
+    input_tokens: int = 0,
+    output_tokens: int = 0,
 ) -> None:
     """Append one JSONL accounting record. Best-effort, never raises.
 
@@ -93,12 +98,19 @@ def _append_accounting_record(
     a session. Defaults to "-" when unknown (e.g. offline bench harness,
     which never runs on_session_start). Recording a field is additive — it
     never affects the compression result written per request.
+
+    ``input_tokens``/``output_tokens`` are token estimates via
+    soma_compressor.final_token_estimate() (tiktoken cl100k_base when
+    available, else the deterministic chars-per-token fallback). Estimates
+    only — provider-reported usage in state.db remains the billing truth.
     """
     try:
         record = {
             "session_id": session_id,
             "input_est_chars": input_chars,
             "output_est_chars": output_chars,
+            "input_est_tokens": input_tokens,
+            "output_est_tokens": output_tokens,
             "results_capped": results_capped,
             "reason": reason,
             "timestamp": datetime.datetime.now(
@@ -376,12 +388,24 @@ class SomaEngine(ContextEngine):
             return None
         # Task 5 accounting: one JSONL line per request that changed something.
         # Best-effort — never raises into the agent loop.
+        # Token estimates come from the vendored SOMA core's
+        # final_token_estimate() (tiktoken if available, else chars/token
+        # fallback). Estimation only — compression selection itself stays
+        # char-based (token-aware selection would change which lines survive).
+        try:
+            in_tokens = soma.final_token_estimate(request_messages)
+            out_tokens = soma.final_token_estimate(out)
+        except Exception:
+            log.exception("soma: token estimate failed; recording zeros")
+            in_tokens = out_tokens = 0
         _append_accounting_record(
             _est_chars(request_messages),
             _est_chars(out),
             results_capped,
             "near_passthrough",
             self._session_id,
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
         )
         return out
 
@@ -476,11 +500,11 @@ def _load_soma():
 
     The vendored file stays byte-identical to upstream (ARCHITECTURE.md
     invariant); host-specific tuning is applied HERE, after load: the
-    engine's PASSTHROUGH_CHARS (32K, raised from the upstream 16K after a
-    floor sweep on real sessions — see the tunables block above) overrides
+    engine's PASSTHROUGH_CHARS (24K, lowered from the earlier host value
+    32K on 2026-09-07; upstream core is 16K) overrides
     the core's MIN_PASSTHROUGH_CHARS. With floor == MAX_KEEP_CHARS the
-    sizing ladder collapses to a single rule: under 32K untouched, over 32K
-    capped at 32K. cap_tool_result's internal proportional cap also reads
+    sizing ladder collapses to a single rule: under 24K untouched, over 24K
+    capped at 24K. cap_tool_result's internal proportional cap also reads
     MIN_PASSTHROUGH_CHARS, so the override covers every path.
     """
     global _soma_mod

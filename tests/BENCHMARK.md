@@ -26,9 +26,9 @@ plugin's `ARCHITECTURE.md` §5.
   compressor core (`soma_compressor.py`): sizing table, idempotency,
   no-inflation, tool-call pairing, determinism across processes. Independent
   of Hermes.
-- `tests/test_engine.py` — 60 contract tests for the Hermes adapter
+- `tests/test_engine.py` — 61 contract tests for the Hermes adapter
   (`engine.py`): ABC identity, token accounting, `get_status()` shape,
-  `select_context()` passthrough rules (32K floor, cache-stable no-op),
+  `select_context()` passthrough rules (24K floor, cache-stable no-op),
   orphan fallback, fail-open fault injection, JSON-envelope unwrap/re-wrap
   for both `content` (read_file) and `output`/`exit_code` (terminal)
   envelopes, accounting behaviour, and the compressor-delegation paths

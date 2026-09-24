@@ -19,9 +19,9 @@ soma_compressor.py   (vendored, MIT, DendriteHQ/SOMA-OpenClaw-compressor)
       - cap_tool_result(message, cap) -> (message, changed)   [role 'toolResult']
       - orphan_ids(messages) -> (result_orphans, call_orphans)
       - cmp_block(inner) / CMP_START / CMP_END                ["[[CMP]]" markers]
-      - Constants: MIN_PASSTHROUGH_CHARS=16_000 (upstream; overridden to 32_000 at load time), KEEP_FRACTION=0.60,
-        MAX_KEEP_CHARS=32_000, REPORTED_RESULT_CAP=16_000
-    Vendored byte-identical (verify: sha256sum against upstream repo).
+      - Constants: MIN_PASSTHROUGH_CHARS=16_000 (upstream; overridden to 24_000 at load time), KEEP_FRACTION=0.60,
+        MAX_KEEP_CHARS=24_000 (upstream 32_000 — the one local edit to the vendored file), REPORTED_RESULT_CAP=16_000
+    Vendored otherwise byte-identical except MAX_KEEP_CHARS (verify: diff against upstream repo).
     Its 16 behavioural tests live in tests/test_soma_core.py.
 
 engine.py            (the adapter, ~350 lines)
@@ -65,17 +65,18 @@ __init__.py / plugin.yaml
   `"exit_code"` back out of the content, so it must survive. Only emits if
   strictly smaller. The unwrap returns the key that held the text so the
   re-wrap writes the compressed text back to the same field.
-- **Sizing rule** (simplified 2026-09-05; constants at top of engine.py):
-  <=32,000 chars passthrough untouched; >32,000 chars capped at 32K. The
+- **Sizing rule** (simplified 2026-09-05, floor lowered 2026-09-07; constants at top of engine.py):
+  <=24,000 chars passthrough untouched; >24,000 chars capped at 24K. The
   upstream 16K floor and mid-band ladder (16K ceiling / keep 60%) were
   retired after a floor sweep over the 33 real sessions in state.db with
   >16K tool results: the 16-32K band is dominated by active-work payloads
   (13 read_file + 6 terminal results) where compression dropped unpinned
   body lines for <=12% savings, while the higher floor costs +0.96% chars
   sent and rewrites fewer distinct results (16 vs 26) = fewer prompt-cache
-  invalidations. The floor is applied by overriding the loaded core's
+  invalidations. The sweep-set 32K floor was later lowered to 24K (2026-09-07). The floor is applied by overriding the loaded core's
   `MIN_PASSTHROUGH_CHARS` in `_load_soma()` — the vendored file stays
-  byte-identical to upstream (invariant 6).
+  byte-identical to upstream except `MAX_KEEP_CHARS` (32K -> 24K, kept
+  equal to the cap for a single-rule ladder).
 - **scikit-learn is imported lazily** inside SOMA's `_line_scores` (first
   compression call, not module import) — keeps Hermes baseline RSS down.
   The fallback scorer (distinct-token counting) is a valid no-sklearn path
@@ -231,7 +232,7 @@ cd ~/.hermes/hermes-agent && hermes chat -v -q "say ACK" 2>&1 | grep -a "Using c
 wc -l ~/.hermes/plugins/context_engine/soma/accounting.jsonl   # gained a line?
 ```
 
-Interpretation: a session whose tool results are all under 32K chars writes
+Interpretation: a session whose tool results are all under 24K chars writes
 NOTHING to accounting.jsonl — that is correct (cache-stable no-op), not a
 failure. Use a 40K+ read_file to force a compression.
 
@@ -262,7 +263,7 @@ failure. Use a 40K+ read_file to force a compression.
    will fail (fail-open: requests pass through uncompressed).
 
 4. **No accounting lines but engine loaded.** Expected when no tool result
-   exceeded 32K chars (e.g. terminal output is size-capped by Hermes before
+   exceeded 24K chars (e.g. terminal output is size-capped by Hermes before
    entering history). Force with a large `read_file`. If a large read_file
    still writes nothing, suspect the JSON-envelope path: the persisted tool
    content is a single-line envelope; check `results_capped` logic in
@@ -330,15 +331,20 @@ cd ~/.hermes/plugins/context_engine/soma
 ```
 
 **Reconfiguration knobs** (top of `engine.py`, no test edits needed):
-- `PASSTHROUGH_CHARS` (32,000 since the 2026-09-05 floor sweep) — raise to compress less often (protects the
+- `PASSTHROUGH_CHARS` (24,000 since 2026-09-07; the sweep set 32K on 2026-09-05) — raise to compress less often (protects the
   cache; lowers savings).
 - `KEEP_FRACTION` (0.60) / `MID_CEILING_CHARS` / `LARGE_CAP_CHARS` — how
   aggressive compression is.
 - `ACCOUNTING_PATH` — where accounting.jsonl lives.
-- SOMA core constants: the vendored `soma_compressor.py` is NEVER edited
-  (byte-identical to upstream, invariant 6). Host tuning lives only in
-  `engine.py`, applied via the `_load_soma()` override — changing
+- SOMA core constants: the vendored `soma_compressor.py` is edited only
+  for `MAX_KEEP_CHARS` (32K -> 24K, kept equal to the floor for a
+  single-rule ladder); everything else stays byte-identical to upstream.
+  Floor tuning lives in `engine.py` via the `_load_soma()` override —
   `PASSTHROUGH_CHARS` there is the single source of truth for the floor.
+  The shipped values are host-tuned, not universal: before changing caps,
+  test candidate values on your own workload (see "Floor sweep" above;
+  the soma-mini-bench harness in tests/BENCHMARK.md measures chars saved
+  vs load-bearing content kept).
 
 **Emergency rollback** (lossless at any time — persisted history is never
 mutated):

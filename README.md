@@ -97,14 +97,14 @@ Symptom-first triage (full details in `ARCHITECTURE.md` §4):
 2. **Import errors probing manually** — run from `~/.hermes/hermes-agent/`;
    from `~/.hermes` the local `plugins/` dir shadows the repo package.
 3. **No accounting lines despite large reads** — expected when nothing
-   exceeds 32K chars; force with a 40K+ `read_file` in a scratch session.
+   exceeds 24K chars; force with a 40K+ `read_file` in a scratch session.
 4. **Request errors / provider 400s** — grep agent.log for `soma:`; the
    engine is fail-open, so an exception means compression silently skipped.
 
 ## After a Hermes update
 
 1. Re-check the symlink (git-pull in the repo can wipe it).
-2. Run the test suite (Testing above) — all 76 must pass.
+2. Run the test suite (Testing above) — all 77 must pass.
 3. Scratch-session check: read a 40K+ char file, confirm
    `accounting.jsonl` gained a line. Only then trust the engine again.
 
@@ -120,20 +120,34 @@ copies are rewritten.
 
 ## Tuning constants
 
-Sizing rule (simplified 2026-09-05 after a floor sweep over real sessions —
-see `ARCHITECTURE.md` "Floor sweep" for the evidence):
+Sizing rule (constants at the top of `engine.py`, applied at load time;
+the vendored upstream core ships a 16K floor):
 
 | Tool-result size        | Action              |
 |-------------------------|---------------------|
-| <= 32,000 chars         | passthrough untouched |
-| > 32,000 chars          | 32K cap             |
+| <= 24,000 chars         | passthrough untouched |
+| > 24,000 chars          | 24K cap             |
 
-The 16K-32K mid-band ladder from upstream was retired: that band is
-dominated by active-work payloads (file reads being edited, test runs being
-triaged) where compression dropped unpinned body lines for marginal
-savings. The floor is applied by `engine.py`'s `PASSTHROUGH_CHARS`
-overriding the core's `MIN_PASSTHROUGH_CHARS` at load time — the vendored
-core file itself is untouched.
+History: the upstream 16K floor and 16K-32K mid-band ladder were retired
+by a 2026-09-05 floor sweep over real sessions (16K -> 32K, evidence in
+`ARCHITECTURE.md` "Floor sweep"), then lowered to 24K on 2026-09-07.
+With floor == cap the ladder collapses to one rule: nothing under the
+floor is ever touched, everything over is capped at it.
+
+These values are host-tuned, not universal. For optimal results on a
+different workload, test custom cap/floor configs: replay your own
+persisted tool results at candidate floors and weigh chars saved
+against load-bearing content kept (method: "Floor sweep" in
+`ARCHITECTURE.md`; offline harness: `soma-mini-bench`, see
+`tests/BENCHMARK.md`), then confirm realised savings with
+`soma-savings` and provider-reported tokens in `state.db`. Compression
+selection stays char-based by design; token figures are reporting-only.
+
+The floor is applied by `engine.py`'s `PASSTHROUGH_CHARS` overriding the
+core's `MIN_PASSTHROUGH_CHARS` at load time. For a single-rule ladder
+(floor == cap), `MAX_KEEP_CHARS` in the vendored `soma_compressor.py`
+must move in tandem — it is the only local edit to the vendored file
+(upstream 32K -> 24K here); everything else stays byte-identical.
 
 ## Accounting
 
@@ -144,9 +158,18 @@ Every `select_context()` call that changed something appends one JSON line to:
 ```
 
 Record fields: `session_id`, `input_est_chars`, `output_est_chars`,
-`results_capped`, `reason`, `timestamp`. Accounting is best-effort — a write
-failure never breaks the request. `session_id` is tagged via `on_session_start`
-so savings can be attributed per session (see `soma-savings` below).
+`results_capped`, `reason`, `timestamp` — plus, since Sep 22 2026,
+`input_est_tokens` / `output_est_tokens` (token estimates via the vendored
+core's `final_token_estimate()`: tiktoken `cl100k_base` when installed,
+else the deterministic chars-per-token fallback; `0` on older lines).
+Token figures are estimates for savings ratios only — provider-reported
+usage in `state.db` (`sessions` / `session_model_usage`) remains the
+billing truth. Compression *selection* stays char-based by design:
+token-aware selection would change which lines survive.
+
+Accounting is best-effort — a write failure never breaks the request.
+`session_id` is tagged via `on_session_start` so savings can be attributed
+per session (see `soma-savings` below).
 
 ## Reading savings: `soma-savings`
 
@@ -156,12 +179,13 @@ writes, never touches the compressor or tester). Installed at
 is also created on this host.
 
 ```bash
-soma-savings                # total chars saved across all sessions
+soma-savings                # total chars + est. tokens saved, all sessions
 soma-savings -v             # per-session list, then the grand total
 soma-savings <session-id>   # that session's savings + grand total
 ```
 
 Run from any directory. Example: `soma-savings 20260905_143052_a1b2c3`.
 Note: accounting rows recorded before the `session_id` field existed group
-under `-` (unknown). Point it at a different accounting file with the
+under `-` (unknown); rows before the token fields existed (pre Sep 22 2026)
+report `0 tok est`. Point it at a different accounting file with the
 `SOMA_ACCOUNTING` env var.

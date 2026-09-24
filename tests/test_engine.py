@@ -369,24 +369,23 @@ class TestSelectContext:
         assert engine_mod._unwrap_json_envelope("plain text") is None
         assert engine_mod._unwrap_json_envelope('{"exit_code": 0}') is None
 
-    def test_passthrough_floor_is_32k(self):
-        """Sizing rule (2026-09-05 floor sweep): under 32K untouched, over 32K
-        capped. 16K floor would compress an 18K active-file read and drop
-        unpinned body lines for <=12% savings."""
+    def test_passthrough_floor_is_24k(self):
+        """Sizing rule (2026-09-07 floor lowered 32K->24K per user request):
+        under 24K untouched, over 24K capped."""
         eng = make_engine()
-        # 18K file read envelope: under the 32K floor -> untouched
-        text_18k = _file_like_lines(280)  # ~18K
-        envelope = json.dumps({"content": text_18k, "total_lines": 280}, ensure_ascii=False)
+        # ~16K file read envelope: under the 24K floor -> untouched
+        text_18k = _file_like_lines(250)  # ~16K
+        envelope = json.dumps({"content": text_18k, "total_lines": 250}, ensure_ascii=False)
         msgs = [{"role": "tool", "tool_call_id": "c1", "content": envelope}]
-        assert len(envelope) < 32_000
+        assert len(envelope) < 24_000
         assert eng.select_context(msgs) is None
         # engine tunable drives the core floor
-        assert engine_mod.PASSTHROUGH_CHARS == 32_000
+        assert engine_mod.PASSTHROUGH_CHARS == 24_000
         soma_mod = engine_mod._load_soma()
-        assert soma_mod.MIN_PASSTHROUGH_CHARS == 32_000
+        assert soma_mod.MIN_PASSTHROUGH_CHARS == 24_000
 
-    def test_over_32k_capped_at_32k(self):
-        """A 60K file read compresses to roughly the 32K cap."""
+    def test_over_24k_capped_at_24k(self):
+        """A 60K file read compresses to roughly the 24K cap."""
         eng = make_engine()
         text = _file_like_lines(950)  # ~60K
         envelope = json.dumps({"content": text, "total_lines": 950}, ensure_ascii=False)
@@ -400,9 +399,9 @@ class TestSelectContext:
         assert out is not None
         after = len(out[1]["content"])
         assert after < len(envelope)
-        # capped near 32K (envelope JSON overhead + [[CMP]] wrapper tolerated)
+        # capped near 24K (envelope JSON overhead + [[CMP]] wrapper tolerated)
         inner = json.loads(out[1]["content"])["content"]
-        assert 30_000 <= len(inner) <= 35_000
+        assert 22_000 <= len(inner) <= 27_000
         assert "[[CMP]]" in inner
 
     def test_real_world_shapes_never_inflate(self):

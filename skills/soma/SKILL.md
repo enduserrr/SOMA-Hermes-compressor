@@ -33,7 +33,7 @@ source of truth and are read from the cloned repo, never duplicated here.
    missing):
 
    ```bash
-   git clone --depth 1 https://github.com/enduserrr/NoSleepHermes.git \
+   git clone --depth 1 https://github.com/enduserrr/SOMA-Hermes-compressor.git \
            ~/.hermes/plugins/context_engine/soma
    ```
 
@@ -76,9 +76,14 @@ bench/soma-mini-bench run --json
 cat ~/.hermes/plugins/context_engine/soma/accounting.jsonl
 
 # Savings report (read-only): total / per-session / one session
-soma-savings                 # total chars saved
+soma-savings                 # total chars + est. tokens saved
 soma-savings -v              # per-session breakdown
 soma-savings <session-id>    # that session + grand total
+
+# Real provider-reported tokens (billing truth; read-only)
+sqlite3 "file:$HOME/.hermes/state.db?mode=ro" \
+  "SELECT session_id, model, input_tokens, output_tokens, cache_read_tokens \
+   FROM session_model_usage WHERE session_id = '<id>'"
 
 # Revert (lossless, anytime)
 hermes config set context.engine compressor
@@ -90,7 +95,7 @@ hermes config set context.engine compressor
   to check when the engine "disappears" (log line `Using context engine:
   soma` absent from `~/.hermes/logs/agent.log`).
 - **No accounting lines is not a failure** when every tool result is under
-  32K chars — that is the cache-stable no-op path. Force with a 40K+ char
+  24K chars — that is the cache-stable no-op path. Force with a 40K+ char
   `read_file` in a scratch session.
 - **Import probing:** running Python from `~/.hermes` shadows the repo's
   `plugins` package with the user-level one — probe from
