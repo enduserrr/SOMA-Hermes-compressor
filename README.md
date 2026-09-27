@@ -87,6 +87,17 @@ bench/soma-mini-bench run            # full suite, human table  (venv launcher)
 bench/soma-mini-bench run --json     # machine-readable (agents)
 ```
 
+### Agent-level A/B benchmark: SOMA-BENCH
+
+For decision-grade comparisons of engine *variants* (not just offline
+replay), [SOMA-BENCH](https://github.com/enduserrr/soma-bench-agent) runs
+matched Hermes subagent arms that differ only in their context engine and
+scores them with the Dendrite SWE formulas (weighted tokens, resolution).
+The flat-cap tuning below was adopted on its evidence — see
+[`docs/REPORT-cap16k.md`](docs/REPORT-cap16k.md): a flat 16K cap beat the
+24K config by −24.3% weighted tokens on medium sessions with zero needle
+loss, which motivated this repo's move to a flat 18K cap.
+
 ## Debugging
 
 Symptom-first triage (full details in `ARCHITECTURE.md` §4):
@@ -125,12 +136,14 @@ the vendored upstream core ships a 16K floor):
 
 | Tool-result size        | Action              |
 |-------------------------|---------------------|
-| <= 24,000 chars         | passthrough untouched |
-| > 24,000 chars          | 24K cap             |
+| <= 18,000 chars         | passthrough untouched |
+| > 18,000 chars          | 18K cap             |
 
 History: the upstream 16K floor and 16K-32K mid-band ladder were retired
 by a 2026-09-05 floor sweep over real sessions (16K -> 32K, evidence in
-`ARCHITECTURE.md` "Floor sweep"), then lowered to 24K on 2026-09-07.
+`ARCHITECTURE.md` "Floor sweep"), lowered to 24K on 2026-09-07, then to a
+flat 18K cap on 2026-09-27 after the SOMA-BENCH `cap16k-flat` run showed
+16K beating 24K on medium sessions (see `docs/REPORT-cap16k.md`).
 With floor == cap the ladder collapses to one rule: nothing under the
 floor is ever touched, everything over is capped at it.
 
@@ -147,7 +160,7 @@ The floor is applied by `engine.py`'s `PASSTHROUGH_CHARS` overriding the
 core's `MIN_PASSTHROUGH_CHARS` at load time. For a single-rule ladder
 (floor == cap), `MAX_KEEP_CHARS` in the vendored `soma_compressor.py`
 must move in tandem — it is the only local edit to the vendored file
-(upstream 32K -> 24K here); everything else stays byte-identical.
+(upstream 32K -> 24K -> 18K here); everything else stays byte-identical.
 
 ## Accounting
 
