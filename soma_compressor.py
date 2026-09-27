@@ -76,7 +76,9 @@ CHARS_PER_TOKEN = 4
 #   > 53.3k             capped at 32k
 KEEP_FRACTION = 0.60           # fraction of an oversized result to keep
 MIN_PASSTHROUGH_CHARS = 16_000 # results at or below this are never touched
-MAX_KEEP_CHARS = 24_000        # upper bound on what is kept from one result
+MAX_KEEP_CHARS = 18_000        # upper bound on what is kept from one result
+                               # (host tuning 2026-09-27: flat 18K cap; engine.py
+                               # override covers MIN_PASSTHROUGH_CHARS only)
 REPORTED_RESULT_CAP = MIN_PASSTHROUGH_CHARS  # metadata only; the effective cap is
                                # the bounded proportional value (see cap_tool_result)
 

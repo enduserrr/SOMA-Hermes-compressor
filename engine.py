@@ -41,12 +41,16 @@ _soma_mod = None
 # floor lowered 32K -> 24K (2026-09-07, user request): the 24-32K band was
 # passing through untouched; now nothing under 24K is ever touched and
 # everything over is capped at 24K.
-PASSTHROUGH_CHARS = 24_000
-MID_CEILING_CHARS = 24_000
+# floor lowered 24K -> 18K (2026-09-27, user request): flat cap validated by
+# soma-bench cap16k-flat (16K beat 24K: -24% weighted tokens on medium
+# sessions, zero needle loss; short sessions neutral). 18K = 16K win with
+# extra fidelity margin. MAX_KEEP_CHARS in soma_compressor.py matches.
+PASSTHROUGH_CHARS = 18_000
+MID_CEILING_CHARS = 18_000
 MID_UPPER_CHARS = 53_300
 KEEP_FRACTION = 0.60
 LARGE_UPPER_CHARS = 53_300
-LARGE_CAP_CHARS = 24_000
+LARGE_CAP_CHARS = 18_000
 
 
 # -- Task 4: overflow gate + minimal fallback --------------------------------

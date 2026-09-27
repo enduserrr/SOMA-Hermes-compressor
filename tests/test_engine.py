@@ -369,23 +369,26 @@ class TestSelectContext:
         assert engine_mod._unwrap_json_envelope("plain text") is None
         assert engine_mod._unwrap_json_envelope('{"exit_code": 0}') is None
 
-    def test_passthrough_floor_is_24k(self):
-        """Sizing rule (2026-09-07 floor lowered 32K->24K per user request):
-        under 24K untouched, over 24K capped."""
+    def test_passthrough_floor_is_18k(self):
+        """Sizing rule (2026-09-27 floor lowered 24K->18K per user request):
+        under 18K untouched, over 18K capped (flat cap, soma-bench
+        cap16k-flat: 16K beat 24K, 18K adds fidelity margin)."""
         eng = make_engine()
-        # ~16K file read envelope: under the 24K floor -> untouched
-        text_18k = _file_like_lines(250)  # ~16K
-        envelope = json.dumps({"content": text_18k, "total_lines": 250}, ensure_ascii=False)
+        # ~13.5K file read (16.8K as escaped JSON envelope): under the 18K
+        # floor -> untouched
+        text_18k = _file_like_lines(190)  # ~13.5K raw, ~16.8K envelope
+        envelope = json.dumps({"content": text_18k, "total_lines": 190}, ensure_ascii=False)
         msgs = [{"role": "tool", "tool_call_id": "c1", "content": envelope}]
-        assert len(envelope) < 24_000
+        assert len(envelope) < 18_000
         assert eng.select_context(msgs) is None
         # engine tunable drives the core floor
-        assert engine_mod.PASSTHROUGH_CHARS == 24_000
+        assert engine_mod.PASSTHROUGH_CHARS == 18_000
         soma_mod = engine_mod._load_soma()
-        assert soma_mod.MIN_PASSTHROUGH_CHARS == 24_000
+        assert soma_mod.MIN_PASSTHROUGH_CHARS == 18_000
+        assert soma_mod.MAX_KEEP_CHARS == 18_000
 
-    def test_over_24k_capped_at_24k(self):
-        """A 60K file read compresses to roughly the 24K cap."""
+    def test_over_18k_capped_at_18k(self):
+        """A 60K file read compresses to roughly the 18K cap."""
         eng = make_engine()
         text = _file_like_lines(950)  # ~60K
         envelope = json.dumps({"content": text, "total_lines": 950}, ensure_ascii=False)
@@ -399,9 +402,9 @@ class TestSelectContext:
         assert out is not None
         after = len(out[1]["content"])
         assert after < len(envelope)
-        # capped near 24K (envelope JSON overhead + [[CMP]] wrapper tolerated)
+        # capped near 18K (envelope JSON overhead + [[CMP]] wrapper tolerated)
         inner = json.loads(out[1]["content"])["content"]
-        assert 22_000 <= len(inner) <= 27_000
+        assert 16_000 <= len(inner) <= 20_000
         assert "[[CMP]]" in inner
 
     def test_real_world_shapes_never_inflate(self):
