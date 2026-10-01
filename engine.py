@@ -127,6 +127,27 @@ def _append_accounting_record(
         log.exception("soma: accounting write failed (request unaffected)")
 
 
+# -- Live-config sync: threshold_tokens_cap coercion -------------------------
+# Mirrors ContextCompressor._coerce_max_tokens (core normalization for
+# threshold_tokens_cap: positive int or None). Tries to borrow the core's
+# own function so the two can never drift; the local copy keeps this module
+# importable (and cheap) when agent.context_compressor is not on the path.
+
+
+def _coerce_threshold_tokens_cap_value(value: Any):
+    try:
+        from agent.context_compressor import ContextCompressor
+
+        return ContextCompressor._coerce_threshold_tokens_cap(value)
+    except Exception:
+        pass
+    try:
+        ivalue = int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return None
+    return ivalue if ivalue > 0 else None
+
+
 class SomaEngine(ContextEngine):
     """SOMA context engine: skeleton with token accounting."""
 
@@ -144,6 +165,43 @@ class SomaEngine(ContextEngine):
         self._api_mode: str = ""
         self._fallback_compressor: Any = None  # lazily created built-in
         self._session_id: str = "-"  # set via on_session_start for accounting
+        self._threshold_tokens_cap = None  # coerced via the property below
+
+    # -- Live-config sync contract (tui_gateway._apply_live_compression_config)
+    # The gateway hot-applies compression.* edits onto the LIVE engine object
+    # (Desktop/TUI never rebuilds the agent), so SomaEngine must tolerate the
+    # same attribute writes the built-in ContextCompressor accepts. Sep 2026:
+    # a newer core added threshold_tokens_cap and this engine's __init__ no
+    # longer had it — every config re-apply logged "'SomaEngine' object has no
+    # attribute '_coerce_threshold_tokens_cap'" and skipped the rest of the
+    # sync. Reproduce the built-in's surface exactly.
+
+    @staticmethod
+    def _coerce_threshold_tokens_cap(value):
+        """Core's normalization: a threshold_tokens cap is a positive int, or
+        None for 'no cap'. Borrows the core's own normalizer when importable
+        (drift-proof), falls back to the identical local copy otherwise —
+        agent.context_compressor stays a LAZY import (plugin import must
+        remain cheap)."""
+        return _coerce_threshold_tokens_cap_value(value)
+
+    @property
+    def threshold_tokens_cap(self):
+        """Coerced cap (positive int | None); None = no cap configured."""
+        return self._threshold_tokens_cap
+
+    @threshold_tokens_cap.setter
+    def threshold_tokens_cap(self, value):
+        self._threshold_tokens_cap = self._coerce_threshold_tokens_cap(value)
+
+    @staticmethod
+    def _effective_threshold_percent(context_length: int, threshold_percent: float) -> float:
+        """Raise-only small-context floor, mirroring the built-in compressor:
+        windows under 512K trigger at >= 75% so live threshold edits derive
+        the same trigger update_model() installs."""
+        if context_length and context_length < 512_000:
+            return max(threshold_percent, 0.75)
+        return threshold_percent
 
     # -- Session lifecycle ----------------------------------------------------
 
@@ -204,9 +262,20 @@ class SomaEngine(ContextEngine):
         provider: str = "",
         api_mode: str = "",
     ) -> None:
-        """Record the active model's context window and derive the threshold."""
+        """Record the active model's context window and derive the threshold.
+
+        Derivation mirrors the built-in compressor's live-sync path: the
+        raise-only small-context floor applies first, then the configured
+        threshold_tokens_cap (tui_gateway._apply_live_compression_config may
+        have set it on this object) clamps the trigger.
+        """
         self.context_length = context_length
-        self.threshold_tokens = int(context_length * self.threshold_percent)
+        effective = self._effective_threshold_percent(context_length, self.threshold_percent)
+        trigger = int(context_length * effective)
+        cap = getattr(self, "threshold_tokens_cap", None)
+        if cap is not None and 0 < cap < trigger:
+            trigger = cap
+        self.threshold_tokens = trigger
         self._model = model
         self._base_url = base_url
         self._api_key = api_key

@@ -131,6 +131,63 @@ class TestGetStatus:
         assert 0 <= status["usage_percent"] <= 100
 
 
+class TestThresholdTokensCapCompat:
+    """Live-config sync contract: tui_gateway._apply_live_compression_config
+    writes threshold_tokens_cap (+ threshold/context attrs) onto the LIVE
+    compressor object, whatever engine is active. SomaEngine must accept the
+    assignment via the built-in's coercion alias and mirror its raise-only
+    small-context floor so update_model() derives an identical trigger.
+    """
+
+    def test_coerce_threshold_tokens_cap_matches_builtin_semantics(self):
+        cc = make_engine()
+        coerce = cc._coerce_threshold_tokens_cap
+        assert coerce(None) is None
+        assert coerce(0) is None
+        assert coerce(-5) is None
+        assert coerce("bad") is None
+        assert coerce(4096) == 4096
+        assert coerce("4096") == 4096
+        assert coerce(4096.0) == 4096
+
+    def test_threshold_tokens_cap_property_defaults_none(self):
+        cc = make_engine()
+        assert cc.threshold_tokens_cap is None
+
+    def test_threshold_tokens_cap_property_roundtrip(self):
+        cc = make_engine()
+        cc.threshold_tokens_cap = 4096
+        assert cc.threshold_tokens_cap == 4096
+        cc.threshold_tokens_cap = "8192"
+        assert cc.threshold_tokens_cap == 8192
+        cc.threshold_tokens_cap = 0
+        assert cc.threshold_tokens_cap is None
+
+    def test_effective_threshold_percent_small_context_floor(self):
+        # Raise-only floor for windows under 512K (mirrors core _effective_threshold_percent).
+        cc = make_engine()
+        assert cc._effective_threshold_percent(1_310_720, 0.50) == 0.50
+        assert cc._effective_threshold_percent(100_000, 0.50) == 0.75
+        assert cc._effective_threshold_percent(0, 0.50) == 0.50
+
+    def test_update_model_respects_cap(self):
+        cc = make_engine()
+        cc.threshold_tokens_cap = 4096
+        cc.update_model("m", 1_310_720)
+        assert cc.threshold_tokens == 4096
+
+    def test_update_model_cap_higher_than_trigger_is_noop(self):
+        cc = make_engine()
+        cc.threshold_tokens_cap = 1_200_000
+        cc.update_model("m", 1_310_720)
+        assert cc.threshold_tokens == 983_040  # int(1_310_720 * 0.75); cap above trigger, no clamp
+
+    def test_update_model_unaffected_without_cap(self):
+        cc = make_engine()
+        cc.update_model("m", 1_000_000)
+        assert cc.threshold_tokens == 750_000  # engine default percent is 0.75
+
+
 class TestStabilityGuarantees:
     def test_select_context_noop_returns_none(self):
         """Nothing changed -> stable no-op (Task 2 skeleton must not touch requests)."""
