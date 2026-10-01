@@ -155,7 +155,6 @@ class SomaEngine(ContextEngine):
         self.last_prompt_tokens: int = 0
         self.last_completion_tokens: int = 0
         self.last_total_tokens: int = 0
-        self.threshold_tokens: int = 0
         self.context_length: int = 0
         self.compression_count: int = 0
         self._model: str = ""
@@ -166,6 +165,13 @@ class SomaEngine(ContextEngine):
         self._fallback_compressor: Any = None  # lazily created built-in
         self._session_id: str = "-"  # set via on_session_start for accounting
         self._threshold_tokens_cap = None  # coerced via the property below
+        self._threshold_tokens: Optional[int] = None  # cached; None = rederive
+        # Raw config percent, BEFORE model overrides / floor — the fallback a
+        # model switch lands on (core: _config_threshold_percent). The gateway
+        # sync writes this attr; derivation re-reads it each time.
+        self._config_threshold_percent: Optional[float] = None
+        # Base percent after model_thresholds resolution (core: _base_threshold_percent).
+        self._base_threshold_percent: Optional[float] = None
 
     # -- Live-config sync contract (tui_gateway._apply_live_compression_config)
     # The gateway hot-applies compression.* edits onto the LIVE engine object
@@ -193,6 +199,15 @@ class SomaEngine(ContextEngine):
     @threshold_tokens_cap.setter
     def threshold_tokens_cap(self, value):
         self._threshold_tokens_cap = self._coerce_threshold_tokens_cap(value)
+        # Relay onto a live nested compressor (reviewer finding 1b): its
+        # firing threshold must honor the configured cap.
+        nested = getattr(self, "_fallback_compressor", None)
+        if nested is not None:
+            try:
+                nested.threshold_tokens_cap = self._threshold_tokens_cap
+                nested._threshold_tokens = None
+            except Exception:
+                pass
 
     @staticmethod
     def _effective_threshold_percent(context_length: int, threshold_percent: float) -> float:
@@ -202,6 +217,58 @@ class SomaEngine(ContextEngine):
         if context_length and context_length < 512_000:
             return max(threshold_percent, 0.75)
         return threshold_percent
+
+    # -- Threshold derivation (mirrors core ContextCompressor) -----------------
+
+    @property
+    def threshold_percent(self) -> float:
+        """Effective percent. Backing attr is written by the setter below;
+        the raw config value lives in _config_threshold_percent (sync writes
+        it), and _base_threshold_percent holds the model_thresholds-resolved
+        value — both core names, both plain attrs on this engine."""
+        return getattr(self, "_threshold_percent_value", 0.75)
+
+    @threshold_percent.setter
+    def threshold_percent(self, value) -> None:
+        try:
+            pct = float(value)
+        except (TypeError, ValueError):
+            return
+        self._threshold_percent_value = pct
+        # Relay onto a live nested compressor (reviewer finding 1b): the
+        # nested owns the actual compaction firing, so gateway-synced
+        # thresholds must reach it. Its cached trigger is invalidated so the
+        # next read re-derives with its own floor+cap logic.
+        nested = getattr(self, "_fallback_compressor", None)
+        if nested is not None:
+            try:
+                nested.threshold_percent = pct
+                raw = getattr(self, "_config_threshold_percent", None)
+                nested._config_threshold_percent = raw if raw is not None and raw > 0 else pct
+                nested._base_threshold_percent = pct
+                nested._threshold_tokens = None
+            except Exception:
+                pass
+
+    @property
+    def threshold_tokens(self) -> int:
+        """Cached trigger; rederived on read when _threshold_tokens is None
+        (core's cached-property semantics — the gateway sync's invalidation
+        write `cc._threshold_tokens = None` then works verbatim)."""
+        if self._threshold_tokens is None:
+            ctx = self.context_length
+            if ctx > 0:
+                effective = self._effective_threshold_percent(ctx, self.threshold_percent)
+                trigger = int(ctx * effective)
+                cap = self.threshold_tokens_cap
+                if cap is not None and 0 < cap < trigger:
+                    trigger = cap
+                self._threshold_tokens = trigger
+        return self._threshold_tokens or 0
+
+    @threshold_tokens.setter
+    def threshold_tokens(self, value) -> None:
+        self._threshold_tokens = value
 
     # -- Session lifecycle ----------------------------------------------------
 
@@ -264,27 +331,43 @@ class SomaEngine(ContextEngine):
     ) -> None:
         """Record the active model's context window and derive the threshold.
 
-        Derivation mirrors the built-in compressor's live-sync path: the
-        raise-only small-context floor applies first, then the configured
-        threshold_tokens_cap (tui_gateway._apply_live_compression_config may
-        have set it on this object) clamps the trigger.
+        Derivation mirrors core's _derive_trigger + update_model: re-resolve
+        the base from the RAW config percent (_config_threshold_percent) via
+        model_thresholds so a switch away from an overridden model falls back
+        to the configured value; apply the raise-only small-context floor;
+        then clamp to the configured threshold_tokens_cap. The gateway sync
+        (tui_gateway._apply_live_compression_config) may have written any of
+        those attrs onto this object.
         """
         self.context_length = context_length
-        effective = self._effective_threshold_percent(context_length, self.threshold_percent)
-        trigger = int(context_length * effective)
-        cap = getattr(self, "threshold_tokens_cap", None)
-        if cap is not None and 0 < cap < trigger:
-            trigger = cap
-        self.threshold_tokens = trigger
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
         self._provider = provider
         self._api_mode = api_mode
+        raw = getattr(self, "_config_threshold_percent", None)
+        if raw is None:
+            raw = self.threshold_percent
+            self._config_threshold_percent = raw
+        try:
+            from agent.context_compressor import resolve_model_threshold
+            base = resolve_model_threshold(
+                model, getattr(self, "model_thresholds", None) or {}, raw, provider
+            )
+        except Exception:
+            base = raw
+        self._base_threshold_percent = base
+        self._threshold_percent_value = base
+        effective = self._effective_threshold_percent(context_length, base)
+        trigger = int(context_length * effective)
+        cap = self.threshold_tokens_cap
+        if cap is not None and 0 < cap < trigger:
+            trigger = cap
+        self._threshold_tokens = trigger
         if self._fallback_compressor is not None:
             self._fallback_compressor.update_model(
                 model, context_length, base_url=base_url,
-                api_key=api_key, provider=provider, api_mode=api_mode,
+                api_key=self._api_key, provider=provider, api_mode=api_mode,
             )
 
     # -- Status / display ----------------------------------------------------
@@ -343,14 +426,22 @@ class SomaEngine(ContextEngine):
         if self._fallback_compressor is None:
             try:
                 from agent.context_compressor import ContextCompressor
+                # Build from the ENGINE's synced threshold state, not hardcoded
+                # values (reviewer finding 1a): the nested owns the actual
+                # compaction firing via should_compress delegation, so the
+                # gateway-synced percent/cap must flow into it. Fallback 0.50
+                # = core's config default, used only when nothing synced yet.
+                raw = getattr(self, "_config_threshold_percent", None)
+                nested_pct = raw if raw is not None and raw > 0 else 0.50
                 self._fallback_compressor = ContextCompressor(
                     model=self._model or "default",
-                    threshold_percent=0.50,
+                    threshold_percent=nested_pct,
                     base_url=self._base_url,
                     api_key=self._api_key,
                     provider=self._provider,
                     api_mode=self._api_mode,
                     config_context_length=self.context_length or None,
+                    threshold_tokens_cap=self.threshold_tokens_cap,
                 )
                 if self.context_length:
                     self._fallback_compressor.update_model(

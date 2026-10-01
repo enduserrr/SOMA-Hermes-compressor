@@ -187,6 +187,82 @@ class TestThresholdTokensCapCompat:
         cc.update_model("m", 1_000_000)
         assert cc.threshold_tokens == 750_000  # engine default percent is 0.75
 
+    def test_sync_invalidation_rederives_threshold_tokens(self):
+        # The gateway sync's write `cc._threshold_tokens = None` must force
+        # re-derivation on next read (core's cached-property semantics):
+        # after syncing threshold 0.4 + cap 262144 onto a 1.31M-window engine,
+        # the stale 983040 trigger must NOT survive a read.
+        cc = make_engine()
+        cc.update_model("m", 1_310_720)  # 983040 at 0.75
+        # live-sync writes:
+        cc._config_threshold_percent = cc._configured_threshold_percent = 0.4
+        cc._base_threshold_percent = 0.4
+        cc.threshold_percent = 0.4
+        cc.threshold_tokens_cap = 262_144
+        cc._threshold_tokens = None
+        assert cc.threshold_tokens == 262_144  # floor(1.31M >= 512K) -> 0.4 -> clamp to cap
+
+    def test_update_model_reresolves_model_threshold_overrides(self):
+        # Reviewer finding 3: switch to an overridden model, then away — the
+        # trigger must fall back to the configured pct, not stick at the
+        # override (mirrors core _derive_trigger / the ABC's own update_model).
+        # Keys are plain substrings, not globs.
+        cc = make_engine()
+        cc.model_thresholds = {"glm": 0.65}
+        cc._config_threshold_percent = 0.5
+        try:
+            from agent.context_compressor import resolve_model_threshold  # noqa: F401
+            core_ok = True
+        except Exception:
+            core_ok = False
+        cc.update_model("glm-5.3-tee", 1_000_000)
+        if core_ok:
+            assert cc.threshold_percent == 0.65
+            assert cc.threshold_tokens == 650_000
+            cc.update_model("other-model", 1_000_000)  # no override match
+            assert cc.threshold_percent == 0.5
+            assert cc.threshold_tokens == 500_000
+        else:
+            # No core import (standalone plugin load): raw config stands,
+            # overrides inert — matches the engine's documented fail-open.
+            assert cc.threshold_percent == 0.5
+            assert cc.threshold_tokens == 500_000
+
+    def test_nested_compressor_inherits_engine_threshold_state(self):
+        # Reviewer finding 1: the nested built-in (which owns the ACTUAL
+        # compaction firing via should_compress delegation) must be built from
+        # the engine's synced config, not a hardcoded 0.50 with no cap.
+        cc = make_engine()
+        cc._config_threshold_percent = 0.4
+        cc.threshold_percent = 0.4
+        cc.threshold_tokens_cap = 262_144
+        cc.update_model("m", 1_310_720)
+        nested = cc._get_fallback_compressor()
+        if nested is None:  # construction requires core importability
+            pytest.skip("core ContextCompressor not importable in this env")
+        assert nested is not None
+        assert nested.threshold_percent == 0.4
+        assert nested.threshold_tokens == 262_144  # cap-clamped
+
+    def test_sync_writes_relay_to_live_nested_compressor(self):
+        # Reviewer finding 1b: a live-sync AFTER the nested compressor exists
+        # must relay threshold_percent / threshold_tokens_cap onto it.
+        cc = make_engine()
+        cc.update_model("m", 1_310_720)
+        nested = cc._get_fallback_compressor()
+        if nested is None:
+            pytest.skip("core ContextCompressor not importable in this env")
+        assert nested is not None
+        # live-sync writes (gateway order):
+        cc._config_threshold_percent = cc._configured_threshold_percent = 0.4
+        cc._base_threshold_percent = 0.4
+        cc.threshold_percent = 0.4
+        cc.threshold_tokens_cap = 262_144
+        cc._threshold_tokens = None
+        assert cc.threshold_tokens == 262_144
+        assert nested.threshold_percent == 0.4
+        assert nested.threshold_tokens == 262_144
+
 
 class TestStabilityGuarantees:
     def test_select_context_noop_returns_none(self):
