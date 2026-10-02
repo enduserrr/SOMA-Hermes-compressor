@@ -16,7 +16,7 @@ from datetime import datetime
 
 import pytest
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent  # context_engine/soma
+ROOT = pathlib.Path(__file__).resolve().parent.parent  # plugin root
 
 spec = importlib.util.spec_from_file_location("soma_engine", ROOT / "engine.py")
 engine_mod = importlib.util.module_from_spec(spec)

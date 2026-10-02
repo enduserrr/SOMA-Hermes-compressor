@@ -29,33 +29,23 @@ source of truth and are read from the cloned repo, never duplicated here.
 
 ## First run on a machine
 
-1. Clone the plugin repo (if `~/.hermes/plugins/context_engine/soma` is
-   missing):
+1. Clone the plugin repo into the flat user plugin dir (if
+   `~/.hermes/plugins/soma` is missing) — the repo root IS the plugin
+   directory, no symlinks into the Hermes repo needed:
 
    ```bash
-   git clone --depth 1 https://github.com/enduserrr/SOMA-Hermes-compressor.git \
-           ~/.hermes/plugins/context_engine/soma
+   git clone --depth 1 https://github.com/enduserrr/SOMA-Hermes-Plugin.git \
+           ~/.hermes/plugins/soma
    ```
 
-2. Symlink into the repo tree — Hermes' engine discovery scans ONLY the
-   repo's own `plugins/context_engine/` directory:
-
-   ```bash
-   ln -sfn ~/.hermes/plugins/context_engine/soma \
-           ~/.hermes/hermes-agent/plugins/context_engine/soma
-   ```
-
-   Completion criterion: `ls -l ~/.hermes/hermes-agent/plugins/context_engine/soma`
-   resolves to the plugin dir.
-
-3. Enable (gateway sessions need `systemctl --user restart
+2. Enable (gateway sessions need `systemctl --user restart
    hermes-gateway.service` afterwards):
 
    ```bash
    hermes config set context.engine soma
    ```
 
-4. Read the authoritative docs in the cloned repo, in this order:
+3. Read the authoritative docs in the cloned repo, in this order:
    - `README.md` — install, scope guarantee, tuning, debugging, post-update
      checklist.
    - `ARCHITECTURE.md` — design + invariants (§1), host contract (§2),
@@ -65,15 +55,15 @@ source of truth and are read from the cloned repo, never duplicated here.
 ## Quick reference
 
 ```bash
-# Test suite (expect 77 passed; venv only — system python3 cannot import)
-cd ~/.hermes/plugins/context_engine/soma
+# Test suite (expect 81 passed / 7 pre-existing env failures; venv only)
+cd ~/.hermes/plugins/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
 
 # Offline benchmark vs default compressor (machine-readable for agents)
 bench/soma-mini-bench run --json
 
 # Accounting trail (one JSONL line per changed request)
-cat ~/.hermes/plugins/context_engine/soma/accounting.jsonl
+cat ~/.hermes/plugins/soma/accounting.jsonl
 
 # Savings report (read-only): total / per-session / one session
 soma-savings                 # total chars + est. tokens saved

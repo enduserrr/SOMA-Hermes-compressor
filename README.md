@@ -16,22 +16,16 @@ MIT license — see `LICENSE` and `soma_compressor.py`). No LLM calls.
 
 ## Install / registration
 
-The plugin lives at:
+Supported layouts (Hermes discovers both, no symlinks into the core repo):
 
-```
-~/.hermes/plugins/context_engine/soma/
-```
+- **User plugin dir (recommended):** clone the repo so its root **is** the
+  plugin directory — `git clone <repo> ~/.hermes/plugins/soma`
+  (flat: `~/.hermes/plugins/<name>/`, one level below `~/.hermes/plugins/`).
+- **Catalog / installer (optional):** `hermes plugins install enduserrr/SOMA-Hermes-Plugin`
+  (once listed; see plugin-catalog admission). Installs the same tree, pinned to a SHA.
 
-**Discovery caveat:** Hermes' `load_context_engine()` scans only the *repo's*
-`plugins/context_engine/` directory, not `~/.hermes/plugins/`. A symlink into
-the repo tree is required:
-
-```bash
-ln -sfn ~/.hermes/plugins/context_engine/soma \
-        ~/.hermes/hermes-agent/plugins/context_engine/soma
-```
-
-Re-check that the symlink still exists after every Hermes upgrade.
+No symlinks into the hermes-agent repo are needed. Restart the gateway (or spawn a
+new session) after moving the directory — engine code loads at process start.
 
 Enable:
 
@@ -70,7 +64,7 @@ immediately.
 ## Testing & benchmarking
 
 ```bash
-cd ~/.hermes/plugins/context_engine/soma
+cd ~/.hermes/plugins/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
 # expect: 77 passed (system python3 CANNOT import the repo — venv only)
 ```
@@ -167,7 +161,7 @@ must move in tandem — it is the only local edit to the vendored file
 Every `select_context()` call that changed something appends one JSON line to:
 
 ```
-~/.hermes/plugins/context_engine/soma/accounting.jsonl
+~/.hermes/plugins/soma/accounting.jsonl
 ```
 
 Record fields: `session_id`, `input_est_chars`, `output_est_chars`,

@@ -12,7 +12,7 @@ The ONLY supported interpreter is the Hermes venv — the system python3
 (3.10) lacks scikit-learn and pytest and cannot even import the repo:
 
 ```bash
-cd ~/.hermes/plugins/context_engine/soma
+cd ~/.hermes/plugins/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
 ```
 
@@ -68,7 +68,7 @@ repo copy is the source of truth.
 ### Running it (humans)
 
 ```bash
-cd ~/.hermes/plugins/context_engine/soma        # repo root (or wherever cloned)
+cd ~/.hermes/plugins/soma        # repo root (or wherever cloned)
 bench/soma-mini-bench run                      # full suite, human-readable table
 bench/soma-mini-bench run --scenario pytest
 bench/soma-mini-bench scenarios                # list available scenarios

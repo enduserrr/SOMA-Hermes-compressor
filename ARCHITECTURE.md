@@ -146,23 +146,26 @@ fall open to the unmodified request.
 ### Selection & discovery mechanics (the part that bites)
 
 `load_context_engine()` (in the Hermes repo's
-`plugins/context_engine/__init__.py`) scans **only the repo's own
-`plugins/context_engine/` directory** — NOT `~/.hermes/plugins/`. And the
-general plugin system deliberately EXCLUDES the `context_engine/` subdir.
-So a user-level engine needs a symlink into the repo tree:
+`plugins/context_engine/__init__.py`) scans the repo's own bundled
+`plugins/context_engine/` directory **and** the flat user dir
+`~/.hermes/plugins/<name>/` (an `__init__.py` whose first 8192 chars mention
+`ContextEngine` or `register_context_engine` marks it as an engine; a
+`register(ctx)` entry point additionally satisfies `hermes plugins validate`).
+This repo installs at `~/.hermes/plugins/soma` — flat, no symlinks into the
+core tree:
 
 ```bash
-ln -sfn ~/.hermes/plugins/context_engine/soma \
-        ~/.hermes/hermes-agent/plugins/context_engine/soma
+git clone <repo> ~/.hermes/plugins/soma
 ```
 
-The loader follows directory scans, so symlinks are discovered and load
-cleanly. Config selection is `context: engine: "soma"` in config.yaml (set
-via `hermes config set context.engine soma` — never hand-edit config.yaml).
+The loader follows directory scans, so the user dir is discovered cleanly
+(bundled-first: a same-named bundled engine would shadow it). Config selection
+is `context: engine: "soma"` in config.yaml (set via
+`hermes config set context.engine soma` — never hand-edit config.yaml).
 CLI sessions pick it up immediately; gateway sessions need a gateway restart
 (`systemctl --user restart hermes-gateway.service`).
 
-Accounting file: `~/.hermes/plugins/context_engine/soma/accounting.jsonl` —
+Accounting file: `~/.hermes/plugins/soma/accounting.jsonl` —
 one JSON line per changed request: `session_id`, `input_est_chars`,
 `output_est_chars`, `results_capped`, `reason` (`near_passthrough`),
 `timestamp`. `session_id` is captured via the ABC's `on_session_start` hook
@@ -178,7 +181,7 @@ offline bench harness, which never triggers `on_session_start`) carry `-`.
 ALWAYS the venv interpreter — system python3 lacks scikit-learn/pytest:
 
 ```bash
-cd ~/.hermes/plugins/context_engine/soma
+cd ~/.hermes/plugins/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -v
 # expect: 77 passed (16 SOMA core + 61 engine, incl. accounting,
 # envelope & delegation)
@@ -229,7 +232,7 @@ print(load_context_engine('soma').name)    # 'soma'"
 # 2. Engine actually selected (verbose CLI run):
 cd ~/.hermes/hermes-agent && hermes chat -v -q "say ACK" 2>&1 | grep -a "Using context engine"
 # 3. Compression check: read a 40K+ char file in a scratch session, then:
-wc -l ~/.hermes/plugins/context_engine/soma/accounting.jsonl   # gained a line?
+wc -l ~/.hermes/plugins/soma/accounting.jsonl   # gained a line?
 ```
 
 Interpretation: a session whose tool results are all under 24K chars writes
@@ -306,11 +309,10 @@ The plugin is designed so Hermes updates can break it in only a handful of
 ways. Work through this checklist top-down:
 
 ```bash
-# 1. Symlink survives? (git-pull/checkout in the repo can wipe it)
-ls -l ~/.hermes/hermes-agent/plugins/context_engine/soma
-# If missing:
-ln -sfn ~/.hermes/plugins/context_engine/soma \
-        ~/.hermes/hermes-agent/plugins/context_engine/soma
+# 1. Plugin dir still in place? (a stray `mv`/rm would orphan it)
+ls ~/.hermes/plugins/soma/plugin.yaml
+# It lives in the flat user dir — core repo updates never touch it.
+# ~/.local/bin/soma-savings symlinks must point at ~/.hermes/plugins/soma/scripts/.
 
 # 2. ABC contract still matches? (Hermes may change the ABC)
 grep -n "abstractmethod" ~/.hermes/hermes-agent/agent/context_engine.py
@@ -323,7 +325,7 @@ grep -n "_apply_context_engine_selection" ~/.hermes/hermes-agent/agent/conversat
 # Confirm select_context is still invoked per-turn and fail-open.
 
 # 4. Full test suite (81 pass / 7 pre-existing env failures, 2 skipped):
-cd ~/.hermes/plugins/context_engine/soma
+cd ~/.hermes/plugins/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -q
 
 # 5. Discovery + live soak (section 3), then:
@@ -355,8 +357,8 @@ systemctl --user restart hermes-gateway.service
 ```
 
 **Worst case** (repo update reshapes plugin discovery entirely): the plugin
-source of truth is `~/.hermes/plugins/context_engine/soma/` (this git repo).
-Re-clone/re-symlink it; if the loader interface changed, port `engine.py`
+source of truth is `~/.hermes/plugins/soma/` (this git repo).
+Re-clone it; if the loader interface changed, port `engine.py`
 against the new `agent/context_engine.py` ABC — the vendored core
 (`soma_compressor.py`) and its tests are independent of Hermes and will not
 need changes.
