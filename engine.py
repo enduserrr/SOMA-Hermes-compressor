@@ -270,6 +270,17 @@ class SomaEngine(ContextEngine):
     def threshold_tokens(self, value) -> None:
         self._threshold_tokens = value
 
+    def clone_for_agent(self) -> "SomaEngine":
+        """Fresh engine per agent (agent/context_engine.py contract).
+
+        The default clone is copy.deepcopy, which would copy a live nested
+        ContextCompressor (locks, caches, partial turn state). A fresh
+        SomaEngine is the correct, cheap clone: config signature is re-applied
+        by the host on the clone's first turn and model overrides re-derive at
+        agent init via update_model().
+        """
+        return SomaEngine()
+
     # -- Session lifecycle ----------------------------------------------------
 
     def on_session_start(self, session_id: str, **kwargs) -> None:
