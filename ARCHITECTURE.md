@@ -322,7 +322,7 @@ grep -n "abstractmethod" ~/.hermes/hermes-agent/agent/context_engine.py
 grep -n "_apply_context_engine_selection" ~/.hermes/hermes-agent/agent/conversation_loop.py
 # Confirm select_context is still invoked per-turn and fail-open.
 
-# 4. Full test suite (must be 77/77):
+# 4. Full test suite (81 pass / 7 pre-existing env failures, 2 skipped):
 cd ~/.hermes/plugins/context_engine/soma
 ~/.hermes/hermes-agent/venv/bin/python3 -m pytest tests/ -q
 
