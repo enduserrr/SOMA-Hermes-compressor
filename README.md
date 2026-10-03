@@ -14,6 +14,30 @@ MIT license — see `LICENSE` and `soma_compressor.py`). No LLM calls.
 > integration contract, debugging triage, and the full repair checklist for
 > when a Hermes update breaks something.
 
+> **Token cost savings with no quality loss.** In matched A/B agent runs,
+> SOMA cut billing-weighted tokens by **~25–30%** on tasks with oversized
+> tool results (up to **−31%** on forced-oversized workloads) at **zero
+> needle loss** — every run resolved, including recall audits of the
+> oldest context — and matched the built-in compressor on small-result
+> tasks. Sources: `docs/REPORT-cap16k.md` (−24.3% weighted, −93% resident
+> chars on medium sessions), SOMA-BENCH agent-level runs.
+
+**What SOMA preserves (never sacrificed for size):**
+
+- **Structure signal:** file paths, `def`/`class`/`import` lines, errors,
+  `raise`/`except` blocks and constants are pinned before any truncation.
+- **Proportional keep:** oversized results keep ~60% of their own content
+  (with a passthrough floor) instead of being crushed to a fixed cap.
+- **Scope:** only `role: tool` messages are rewritten — system prompt,
+  skills, memories and user/assistant history pass through untouched.
+- **Idempotent:** already-compressed results are a fixed point — no
+  double-compression, no compounding degradation on long sessions.
+- **Cache-safe:** compression is a pure function of each message's own
+  content, byte-stable turn-to-turn, so the provider prompt cache stays
+  warm (compression never invalidates it).
+- **Loop-guarded:** repeated identical assistant responses / tool calls
+  are detected and guarded rather than silently compressed away.
+
 ## Install / registration
 
 Supported layouts (Hermes discovers both, no symlinks into the core repo):
