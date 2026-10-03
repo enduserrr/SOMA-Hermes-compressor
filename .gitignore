@@ -1,5 +1,17 @@
-# Runtime artifacts, not source
-accounting.jsonl
-bench_results/
-__pycache__/
-.pytest_cache/
+# Ignore everything
+/*
+
+# Except these
+!/.gitignore
+!/ARCHITECTURE.md
+!/__init__.py
+!/engine.py
+!/scripts
+!/soma_compressor.py
+!/LICENSE
+!/README.md
+!/bench/
+!/docs/
+!/plugin.yaml
+!/skills/
+!/tests/
