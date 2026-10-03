@@ -3,6 +3,6 @@ version: "0.2.0"
 description: "SOMA extractive context engine — shrinks oversized tool results per-request (TF-IDF line scoring, deterministic, cache-stable) before each provider call."
 author: ais (enduserrr) + NoSleepHermes
 license: MIT
-homepage: https://github.com/enduserrr/SOMA-Hermes-Plugin
+homepage: https://github.com/enduserrr/SOMA-Hermes-compressor
 tags: [context-engine, compression, performance]
 requires_hermes: ">=0.21.0"

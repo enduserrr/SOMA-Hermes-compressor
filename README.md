@@ -21,7 +21,7 @@ Supported layouts (Hermes discovers both, no symlinks into the core repo):
 - **User plugin dir (recommended):** clone the repo so its root **is** the
   plugin directory — `git clone <repo> ~/.hermes/plugins/soma`
   (flat: `~/.hermes/plugins/<name>/`, one level below `~/.hermes/plugins/`).
-- **Catalog / installer (optional):** `hermes plugins install enduserrr/SOMA-Hermes-Plugin`
+- **Catalog / installer (optional):** `hermes plugins install enduserrr/SOMA-Hermes-compressor`
   (once listed; see plugin-catalog admission). Installs the same tree, pinned to a SHA.
 
 No symlinks into the hermes-agent repo are needed. Restart the gateway (or spawn a

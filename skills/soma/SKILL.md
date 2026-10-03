@@ -34,7 +34,7 @@ source of truth and are read from the cloned repo, never duplicated here.
    directory, no symlinks into the Hermes repo needed:
 
    ```bash
-   git clone --depth 1 https://github.com/enduserrr/SOMA-Hermes-Plugin.git \
+   git clone --depth 1 https://github.com/enduserrr/SOMA-Hermes-compressor.git \
            ~/.hermes/plugins/soma
    ```
 
