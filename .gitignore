@@ -15,3 +15,5 @@
 !/plugin.yaml
 !/skills/
 !/tests/
+
+*/**__pycache__
